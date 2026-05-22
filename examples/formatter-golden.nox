@@ -1,0 +1,52 @@
+import "export-math.nox" as math;
+
+export record User {
+    name: str,
+    scores: [int],
+}
+
+export fn classify(user: User, bonus: int) -> str {
+    let total: int = user.scores[0] + bonus;
+    if (total > 80) {
+        return user.name + ":high";
+    } else if (total > 40) {
+        return user.name + ":mid";
+    } else {
+        return user.name + ":low";
+    }
+}
+
+let user: User = User {name: "nox", scores: [20, 22]};
+
+let doubled: int = math.double(21);
+
+match (doubled) {
+    42 => {
+        classify(user, 25);
+    }
+    _ => {
+        "unexpected";
+    }
+}
+
+let maybe_score: option[int] = some(doubled);
+
+match (maybe_score) {
+    some(score) => {
+        score;
+    }
+    none => {
+        0;
+    }
+}
+
+let loaded: result[str, str] = ok("ready");
+
+match (loaded) {
+    ok(body) => {
+        body;
+    }
+    err(message) => {
+        message;
+    }
+}

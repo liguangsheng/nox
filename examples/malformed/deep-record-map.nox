@@ -1,0 +1,15 @@
+record Leaf {
+    score: int,
+}
+
+record Branch {
+    leaves: [Leaf],
+    scores: map[str, int],
+}
+
+let branch: Branch = Branch {
+    leaves: [Leaf {score: 1}, Leaf {score: 2}],
+    scores: {"left": 1, "right": "bad"},
+};
+
+branch;

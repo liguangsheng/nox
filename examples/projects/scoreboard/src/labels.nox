@@ -1,0 +1,10 @@
+export fn score_label(score: int) -> str {
+    if (score > 20) {
+        return "score:high";
+    }
+    return "score:low";
+}
+
+fn private_label() -> str {
+    return "hidden";
+}

@@ -1,0 +1,8 @@
+let value: int = 10;
+
+{
+    let value: int = 20;
+    value = value + 1;
+}
+
+value;

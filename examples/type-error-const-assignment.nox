@@ -1,0 +1,2 @@
+const value: int = 42;
+value = 0;

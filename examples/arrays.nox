@@ -1,0 +1,4 @@
+let values: [int] = [10, 20, 30];
+let empty: [int] = [];
+
+values[0] + values[2] + len(empty);

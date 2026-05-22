@@ -1,0 +1,14 @@
+import "bench-module-leaf.nox";
+
+let total: int = 0;
+let i: int = 0;
+while (i < 10000) {
+    total = total + double(answer());
+    i = i + 1;
+}
+
+if (total == 840000) {
+    "modules-ok";
+} else {
+    "modules-bad";
+}

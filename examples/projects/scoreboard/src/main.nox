@@ -1,0 +1,11 @@
+import "labels.nox" as labels;
+
+import "scoring.nox" as scoring;
+
+let base: int = scoring.total(10, 7);
+
+let bonus: int = scoring.sqrt_bonus();
+
+let score: int = base + bonus;
+
+labels.score_label(score);

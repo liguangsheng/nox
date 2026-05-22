@@ -1,0 +1,11 @@
+[package]
+name = "scoreboard"
+version = "0.0.3"
+description = "Multi-module Nox sample project"
+
+[entrypoints]
+main = "src/main.nox"
+
+[modules]
+source_dirs = ["src"]
+test_dirs = ["tests"]

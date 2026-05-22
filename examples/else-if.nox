@@ -1,0 +1,9 @@
+let score: int = 75;
+
+if (score >= 90) {
+    "high";
+} else if (score >= 60) {
+    "mid";
+} else {
+    "low";
+}

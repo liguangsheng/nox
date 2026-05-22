@@ -1,0 +1,9 @@
+let positive: int = 7 / 2;
+let negative: int = (0 - 7) / 2;
+let converted: int = to_int(to_float(21) * 2.0);
+
+if (positive == 3 && negative == (0 - 3) && converted == 42) {
+    "numeric-ok";
+} else {
+    "bad";
+}

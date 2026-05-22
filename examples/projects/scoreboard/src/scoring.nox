@@ -1,0 +1,7 @@
+export fn total(wins: int, assists: int) -> int {
+    return wins * 2 + assists;
+}
+
+export fn sqrt_bonus() -> int {
+    return to_int(sqrt(16.0));
+}

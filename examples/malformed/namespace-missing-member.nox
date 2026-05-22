@@ -1,0 +1,3 @@
+import "namespace-helper.nox" as helper;
+
+helper.missing();

@@ -1,0 +1,7 @@
+export fn double(value: int) -> int {
+    return helper(value);
+}
+
+fn helper(value: int) -> int {
+    return value * 2;
+}

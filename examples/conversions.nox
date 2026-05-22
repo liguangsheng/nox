@@ -1,0 +1,3 @@
+let base: int = 21;
+let scaled: float = to_float(base) * 2.0;
+to_int(scaled);

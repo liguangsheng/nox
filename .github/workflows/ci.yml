@@ -1,0 +1,100 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  check:
+    name: cargo fmt / test / clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt clippy
+          rustup override set stable
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+      - name: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
+      - name: cargo test
+        run: cargo test --all
+      - name: git diff --check
+        run: git diff --check HEAD
+
+  c_embedding:
+    name: C embedding smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup override set stable
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cembed-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+      - name: Build nox_core with C ABI
+        run: cargo build -p nox_core
+      - name: Compile and run C smoke
+        run: |
+          cc -Icrates/nox_core/include examples/embed/c_embedding.c \
+             -Ltarget/debug -lnox_core -Wl,-rpath,target/debug \
+             -o target/debug/nox_c_embedding
+          target/debug/nox_c_embedding
+
+  markdown_links:
+    name: Markdown local link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run local link checker
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+          roots = [pathlib.Path(p) for p in [
+              "README.md", "README_zh_CN.md", "docs",
+              "examples/README.md", "PLAN.md", "GOAL.md",
+          ]]
+          files = []
+          for root in roots:
+              if root.is_dir():
+                  files.extend(root.rglob("*.md"))
+              elif root.exists():
+                  files.append(root)
+          missing = []
+          for path in files:
+              text = path.read_text()
+              for target in re.findall(r"\[[^\]]+\]\(([^)#][^)]+)\)", text):
+                  if "://" in target or target.startswith("mailto:"):
+                      continue
+                  target_path = (path.parent / target).resolve()
+                  if not target_path.exists():
+                      missing.append((str(path), target))
+          if missing:
+              print("missing markdown links:")
+              for entry in missing:
+                  print(f"{entry[0]}: {entry[1]}")
+              sys.exit(1)
+          print("markdown links ok")
+          PY

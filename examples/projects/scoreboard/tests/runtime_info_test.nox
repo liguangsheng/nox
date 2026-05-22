@@ -1,0 +1,23 @@
+import "runtime_info.nox" as runtime_info;
+
+fn test_manifest_present() -> bool {
+    return runtime_info.has_manifest();
+}
+
+fn test_manifest_result() -> bool {
+    let manifest: result[str, str] = runtime_info.try_manifest();
+    match (manifest) {
+        ok(contents) => {
+            return len(contents) > 0;
+        }
+        err(message) => {
+            return false;
+        }
+    }
+}
+
+fn test_optional_description() -> bool {
+    let present: option[str] = some("configured");
+    let missing: option[str] = none;
+    return runtime_info.describe_optional(present) == "configured" && runtime_info.describe_optional(missing) == "missing";
+}

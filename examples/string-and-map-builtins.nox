@@ -1,0 +1,15 @@
+let greeting: str = "你好nox";
+let scores: map[str, int] = {
+    "alice": 90,
+    "bob": 75,
+};
+
+if (len(greeting) != 5) {
+    "len-bad";
+} else if (!contains(scores, "alice")) {
+    "alice-missing";
+} else if (contains(scores, "missing")) {
+    "missing-present";
+} else {
+    "builtins-ok";
+}

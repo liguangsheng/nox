@@ -1,0 +1,16 @@
+fn sum_to(limit: int) -> int {
+    let current: int = 1;
+    let total: int = 0;
+    while (current <= limit) {
+        total = total + current;
+        current = current + 1;
+    }
+    return total;
+}
+
+let total: int = sum_to(10);
+if (total == 55) {
+    "sum-ok";
+} else {
+    "sum-bad";
+}

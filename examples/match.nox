@@ -1,0 +1,29 @@
+let code: int = 2;
+let label: str = "";
+
+match (code) {
+    1 => {
+        label = "one";
+    }
+    2 => {
+        label = "two";
+    }
+    _ => {
+        label = "other";
+    }
+}
+
+let suffix: str = "";
+match (label) {
+    "one" => {
+        suffix = "-1";
+    }
+    "two" => {
+        suffix = "-2";
+    }
+    _ => {
+        suffix = "-x";
+    }
+}
+
+label + suffix;

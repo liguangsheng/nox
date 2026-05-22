@@ -1,0 +1,7 @@
+let escaped: str = "line\n\t\"quote\"\\";
+
+if (escaped == "line\n\t\"quote\"\\") {
+    "escape-ok";
+} else {
+    "bad";
+}

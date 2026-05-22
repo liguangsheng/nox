@@ -1,0 +1,2 @@
+let answer: int = "forty two";
+answer;

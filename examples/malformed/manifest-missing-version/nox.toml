@@ -1,0 +1,5 @@
+[package]
+name = "missing-version"
+
+[entrypoints]
+main = "main.nox"

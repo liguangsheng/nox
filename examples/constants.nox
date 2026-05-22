@@ -1,0 +1,10 @@
+const ANSWER: int = 42;
+const HALF: int = 21;
+const LABEL: str = "const-ok";
+
+let total: int = ANSWER + HALF;
+if (total == 63) {
+    LABEL;
+} else {
+    "const-bad";
+}

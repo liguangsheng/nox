@@ -1,0 +1,9 @@
+import "scoring.nox" as scoring;
+
+fn test_total() -> bool {
+    return scoring.total(10, 7) == 27;
+}
+
+fn test_sqrt_bonus() -> bool {
+    return scoring.sqrt_bonus() == 4;
+}

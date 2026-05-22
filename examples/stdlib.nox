@@ -1,0 +1,8 @@
+let side: float = 9.0;
+let diagonal: float = sqrt(side * side + side * side);
+
+if (diagonal > 12.0) {
+    "sqrt-ok";
+} else {
+    "sqrt-bad";
+}

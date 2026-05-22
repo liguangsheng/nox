@@ -1,0 +1,44 @@
+import "std/env.nox" as env;
+
+import "std/fs.nox" as fs;
+
+import "std/time.nox" as time;
+
+export fn has_manifest() -> bool {
+    return fs.exists("nox.toml") || fs.exists("../nox.toml");
+}
+
+export fn try_manifest() -> result[str, str] {
+    let manifest: result[str, str] = fs.try_read_text("nox.toml");
+    match (manifest) {
+        ok(contents) => {
+            return ok(contents);
+        }
+        err(message) => {
+            return fs.try_read_text("../nox.toml");
+        }
+    }
+}
+
+export fn environment() -> map[str, str] {
+    return env.list();
+}
+
+export fn optional_env(name: str) -> option[str] {
+    return env.try_get(name);
+}
+
+export fn describe_optional(value: option[str]) -> str {
+    match (value) {
+        some(text) => {
+            return text;
+        }
+        none => {
+            return "missing";
+        }
+    }
+}
+
+export fn pause() -> null {
+    return time.sleep_ms(0);
+}

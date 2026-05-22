@@ -1,0 +1,5 @@
+fn label(name: str, status: str) -> str {
+    return name + ":" + status;
+}
+
+label("nox", "typed");

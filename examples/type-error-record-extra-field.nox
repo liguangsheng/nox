@@ -1,0 +1,5 @@
+record User {
+    name: str,
+}
+
+let user: User = User { name: "nox", score: 42 };

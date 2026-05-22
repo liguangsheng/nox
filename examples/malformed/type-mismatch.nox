@@ -1,0 +1,6 @@
+record User {
+    name: str,
+}
+
+let user: User = User {name: 1};
+user;

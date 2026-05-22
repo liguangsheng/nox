@@ -1,0 +1,13 @@
+fn fib(n: int) -> int {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+let answer: int = fib(24);
+if (answer == 46368) {
+    "fib-ok";
+} else {
+    "fib-bad";
+}

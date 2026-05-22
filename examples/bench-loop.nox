@@ -1,0 +1,12 @@
+let total: int = 0;
+let i: int = 0;
+while (i < 200000) {
+    total = total + i;
+    i = i + 1;
+}
+
+if (total == 19999900000) {
+    "loop-ok";
+} else {
+    "loop-bad";
+}

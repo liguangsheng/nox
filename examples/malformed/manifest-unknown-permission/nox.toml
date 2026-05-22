@@ -1,0 +1,6 @@
+[package]
+name = "unknown-permission"
+version = "0.0.1"
+
+[runtime]
+permissions = ["filesystem.read", "shell.exec"]

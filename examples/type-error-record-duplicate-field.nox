@@ -1,0 +1,4 @@
+record User {
+    name: str,
+    name: int,
+}

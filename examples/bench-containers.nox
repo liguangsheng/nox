@@ -1,0 +1,21 @@
+fn build(count: int) -> int {
+    let i: int = 0;
+    let captured: int = 0;
+    while (i < count) {
+        let values: [int] = [i, i, i, i];
+        let scores: map[str, int] = {
+            "first": values[0],
+            "second": values[1],
+        };
+        captured = captured + scores["first"];
+        i = i + 1;
+    }
+    return captured;
+}
+
+let total: int = build(10000);
+if (total == 49995000) {
+    "containers-ok";
+} else {
+    "containers-bad";
+}

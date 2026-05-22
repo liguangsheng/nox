@@ -1,0 +1,16 @@
+let scores: map[str, int] = {"core": 20, "runtime": 22};
+
+let core: option[int] = map_get(scores, "core");
+
+let total: int = 0;
+
+match (core) {
+    some(value) => {
+        total = value + scores["runtime"];
+    }
+    none => {
+        total = 0;
+    }
+}
+
+total;

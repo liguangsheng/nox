@@ -1,0 +1,7 @@
+record User {
+    name: str,
+    score: int,
+}
+
+let user: User = User { name: "nox", score: 40 };
+user.score + 2;

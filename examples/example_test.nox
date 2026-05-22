@@ -1,0 +1,7 @@
+fn test_arithmetic() -> bool {
+    return 21 * 2 == 42;
+}
+
+fn test_string_len() -> bool {
+    return len("nox") == 3;
+}

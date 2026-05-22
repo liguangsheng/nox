@@ -1,0 +1,8 @@
+let ready: bool = true;
+let blocked: bool = false;
+
+if (ready && !blocked || false) {
+    "logic-ok";
+} else {
+    "logic-bad";
+}

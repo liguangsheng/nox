@@ -1,0 +1,3 @@
+fn double(value: float) -> float {
+    return value * 2.0;
+}

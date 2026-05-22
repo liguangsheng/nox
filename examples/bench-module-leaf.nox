@@ -1,0 +1,7 @@
+export fn answer() -> int {
+    return 42;
+}
+
+export fn double(value: int) -> int {
+    return value * 2;
+}

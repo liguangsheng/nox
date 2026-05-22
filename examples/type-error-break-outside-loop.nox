@@ -1,0 +1,6 @@
+fn no_loop() -> int {
+    break;
+    return 0;
+}
+
+no_loop();

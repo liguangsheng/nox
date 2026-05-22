@@ -1,0 +1,36 @@
+fn first_factor(limit: int, target: int) -> int {
+    let i: int = 1;
+    let answer: int = 0;
+    while (i < limit) {
+        if (i == target) {
+            answer = i;
+            break;
+        }
+        i = i + 1;
+    }
+    return answer;
+}
+
+fn sum_skip(limit: int, skip: int) -> int {
+    let total: int = 0;
+    for i in 0..10 {
+        if (i == skip) {
+            continue;
+        }
+        if (i >= limit) {
+            break;
+        }
+        total = total + i;
+    }
+    return total;
+}
+
+if (first_factor(20, 7) == 7) {
+    if (sum_skip(6, 3) == 0 + 1 + 2 + 4 + 5) {
+        "loop-ok";
+    } else {
+        "loop-bad-sum";
+    }
+} else {
+    "loop-bad-factor";
+}
