@@ -23,6 +23,26 @@ fn c_abi_exposes_version_string() {
 }
 
 #[test]
+fn c_abi_enum_values_are_stable() {
+    assert_eq!(NoxCoreStatus::Ok as i32, 0);
+    assert_eq!(NoxCoreStatus::NullPointer as i32, 1);
+    assert_eq!(NoxCoreStatus::InvalidUtf8 as i32, 2);
+    assert_eq!(NoxCoreStatus::Error as i32, 3);
+
+    assert_eq!(NoxCoreValueKind::Null as i32, 0);
+    assert_eq!(NoxCoreValueKind::Bool as i32, 1);
+    assert_eq!(NoxCoreValueKind::Int as i32, 2);
+    assert_eq!(NoxCoreValueKind::Float as i32, 3);
+    assert_eq!(NoxCoreValueKind::String as i32, 4);
+    assert_eq!(NoxCoreValueKind::Function as i32, 5);
+    assert_eq!(NoxCoreValueKind::Array as i32, 6);
+    assert_eq!(NoxCoreValueKind::Map as i32, 7);
+    assert_eq!(NoxCoreValueKind::Record as i32, 8);
+    assert_eq!(NoxCoreValueKind::Option as i32, 9);
+    assert_eq!(NoxCoreValueKind::Result as i32, 10);
+}
+
+#[test]
 fn runs_registered_rust_host_function() {
     let mut engine = Engine::new();
     engine
@@ -98,12 +118,31 @@ fn host_callback_error_includes_function_name() {
         .unwrap();
 
     let err = engine.eval("explode();").unwrap_err();
+    assert_eq!(err.code, "host.callback");
     assert!(
         err.message.contains("host function 'explode'"),
         "expected message to name the host function, got: {}",
         err.message
     );
     assert!(err.message.contains("boom"));
+}
+
+#[test]
+fn host_callback_error_preserves_diagnostic_code() {
+    let mut engine = Engine::new();
+    engine
+        .register_host_function(HostFunctionBuilder::new("deny", Type::Int), |_| {
+            Err(
+                crate::Diagnostic::new("permission denied", crate::Span { start: 0, end: 0 })
+                    .with_code("permission.denied"),
+            )
+        })
+        .unwrap();
+
+    let err = engine.eval("deny();").unwrap_err();
+    assert_eq!(err.code, "permission.denied");
+    assert!(err.message.contains("host function 'deny'"));
+    assert!(err.message.contains("permission denied"));
 }
 
 #[test]
@@ -119,6 +158,7 @@ fn host_callback_error_preserves_explicit_source_label() {
         .unwrap();
 
     let err = engine.eval("custom();").unwrap_err();
+    assert_eq!(err.code, "host.callback");
     // 不再包装第二层 "host function 'custom':" 前缀。
     assert_eq!(
         err.message.matches("host function 'custom'").count(),
@@ -126,6 +166,25 @@ fn host_callback_error_preserves_explicit_source_label() {
         "expected single source label, got: {}",
         err.message
     );
+}
+
+#[test]
+fn host_callback_panic_becomes_diagnostic_and_engine_remains_reusable() {
+    let mut engine = Engine::new();
+    engine
+        .register_host_function(HostFunctionBuilder::new("panic_host", Type::Int), |_| {
+            panic!("host exploded")
+        })
+        .unwrap();
+
+    let err = engine.eval("panic_host();").unwrap_err();
+    assert_eq!(err.code, "host.callback");
+    assert!(err.message.contains("host function 'panic_host'"));
+    assert!(err.message.contains("host callback panicked"));
+    assert!(err.message.contains("host exploded"));
+
+    let value = engine.eval("1 + 1;").unwrap();
+    assert_eq!(value, Value::Int(2));
 }
 
 unsafe extern "C" fn c_host_double(
@@ -964,6 +1023,31 @@ fn engine_can_be_reused_after_budget_exhaustion_when_budget_is_reset() {
 }
 
 #[test]
+fn instruction_budget_resumes_after_host_callback_returns() {
+    let mut engine = Engine::new();
+    engine
+        .register_host_function(HostFunctionBuilder::new("host_tick", Type::Int), |_| {
+            Ok(Value::Int(0))
+        })
+        .unwrap();
+    engine.set_instruction_budget(Some(24));
+
+    let err = engine
+        .eval(
+            r#"
+            let value: int = host_tick();
+            while (value < 100) {
+                value = value + 1;
+            }
+            value;
+            "#,
+        )
+        .unwrap_err();
+
+    assert!(err.message.contains("instruction budget exhausted"));
+}
+
+#[test]
 fn session_can_be_reused_after_budget_exhaustion_when_budget_is_reset() {
     let mut session = Session::new();
     session.engine_mut().set_instruction_budget(Some(8));
@@ -1093,6 +1177,50 @@ fn host_held_rust_values_keep_heap_objects_until_dropped() {
     );
 
     drop(values);
+    engine.collect_garbage();
+    assert_eq!(engine.heap_object_count(), 0);
+}
+
+#[test]
+fn host_held_module_container_values_collect_after_drop() {
+    let mut engine = Engine::new();
+    engine.set_module_loader(|specifier| match specifier {
+        "factory.nox" => Ok(r#"
+            export fn labels(seed: int) -> [str] {
+                return ["module", "value"];
+            }
+
+            export fn scores(seed: int) -> map[str, int] {
+                return {"seed": seed};
+            }
+        "#
+        .to_string()),
+        other => panic!("unexpected import '{other}'"),
+    });
+
+    let mut held = Vec::new();
+    for index in 0..80 {
+        let value = engine
+            .eval(&format!(
+                r#"
+                import "factory.nox";
+                let label_values: [str] = labels({index});
+                let score_values: map[str, int] = scores({index});
+                let seed: int = score_values["seed"];
+                [label_values[0] + label_values[1], "score"];
+                "#
+            ))
+            .unwrap();
+        held.push(value);
+    }
+
+    engine.collect_garbage();
+    assert!(
+        engine.heap_object_count() >= held.len(),
+        "host-held module container values should keep heap objects alive"
+    );
+
+    drop(held);
     engine.collect_garbage();
     assert_eq!(engine.heap_object_count(), 0);
 }
@@ -1258,4 +1386,56 @@ fn repeated_c_abi_handle_free_collects_nested_heap_values() {
             "freeing C record handle should release nested values at iteration {index}"
         );
     }
+}
+
+#[test]
+fn c_abi_option_and_result_handles_keep_nested_heap_values_until_freed() {
+    let mut engine = c_engine();
+
+    let option_source = std::ffi::CString::new(
+        r#"
+        let value: option[[str]] = some(["alpha", "beta"]);
+        value;
+        "#,
+    )
+    .unwrap();
+    let mut option = NoxCoreValue::default();
+    let status = unsafe { nox_core_engine_eval(&mut engine, option_source.as_ptr(), &mut option) };
+    assert_eq!(status, NoxCoreStatus::Ok);
+    assert_eq!(option.kind, NoxCoreValueKind::Option);
+
+    let result_source = std::ffi::CString::new(
+        r#"
+        let value: result[map[str, str], str] = ok({"nox": "core"});
+        value;
+        "#,
+    )
+    .unwrap();
+    let mut result = NoxCoreValue::default();
+    let status = unsafe { nox_core_engine_eval(&mut engine, result_source.as_ptr(), &mut result) };
+    assert_eq!(status, NoxCoreStatus::Ok);
+    assert_eq!(result.kind, NoxCoreValueKind::Result);
+
+    engine.engine.collect_garbage();
+    assert!(
+        engine.engine.heap_object_count() >= 2,
+        "C option/result handles should keep nested heap values alive"
+    );
+
+    let mut option_payload = NoxCoreValue::default();
+    let status = unsafe { nox_core_option_payload(option.option_handle, &mut option_payload) };
+    assert_eq!(status, NoxCoreStatus::Ok);
+    assert_eq!(option_payload.kind, NoxCoreValueKind::Array);
+    unsafe { nox_core_array_free(option_payload.array_handle) };
+
+    let mut result_payload = NoxCoreValue::default();
+    let status = unsafe { nox_core_result_payload(result.result_handle, &mut result_payload) };
+    assert_eq!(status, NoxCoreStatus::Ok);
+    assert_eq!(result_payload.kind, NoxCoreValueKind::Map);
+    unsafe { nox_core_map_free(result_payload.map_handle) };
+
+    unsafe { nox_core_option_free(option.option_handle) };
+    unsafe { nox_core_result_free(result.result_handle) };
+    engine.engine.collect_garbage();
+    assert_eq!(engine.engine.heap_object_count(), 0);
 }

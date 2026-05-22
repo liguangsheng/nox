@@ -303,10 +303,15 @@ impl LspServer {
     fn publish_diagnostics(&mut self, uri: &str, source: &str) -> String {
         let overlay = self.documents_overlay();
         let result = if let Some(base) = file_uri_base(uri) {
-            let session = self.sessions.entry(uri.to_string()).or_default();
-            install_lsp_stdlib(session);
-            check_session_loader(session, base, overlay);
-            session.check_diagnostics(source)
+            match manifest_diagnostic(&base) {
+                Some(diagnostic) => Err(vec![diagnostic]),
+                None => {
+                    let session = self.sessions.entry(uri.to_string()).or_default();
+                    install_lsp_stdlib(session);
+                    check_session_loader(session, base, overlay);
+                    session.check_diagnostics(source)
+                }
+            }
         } else {
             let mut runtime = Runtime::with_permissions(RuntimePermissions::cli());
             runtime.check_source_diagnostics(source)
@@ -356,6 +361,11 @@ fn manifest_search_paths(base: &Path) -> Vec<PathBuf> {
         Ok(Some(manifest)) => manifest.source_dirs(),
         _ => Vec::new(),
     }
+}
+
+fn manifest_diagnostic(base: &Path) -> Option<Diagnostic> {
+    let probe = base.join("probe.nox");
+    Manifest::discover(&probe).err()
 }
 
 fn read_module(path: &Path) -> Result<String, Diagnostic> {

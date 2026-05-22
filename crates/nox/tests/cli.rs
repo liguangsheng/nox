@@ -775,6 +775,35 @@ fn test_json_reports_runtime_diagnostic_code() {
 }
 
 #[test]
+fn test_json_reports_permission_denied_code() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-test-permission-json-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("permission_test.nox");
+    fs::write(
+        &path,
+        "fn test_env() -> bool {\n    env_get(\"PATH\");\n    return true;\n}\n",
+    )
+    .unwrap();
+
+    let output = nox_command()
+        .args(["test", "--json", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"schema\":\"nox.test.v1\""));
+    assert!(stdout.contains("\"name\":\"test_env\""));
+    assert!(stdout.contains("\"code\":\"permission.denied\""));
+    assert!(stdout.contains("environment capability is required to call env_get"));
+}
+
+#[test]
 fn test_discovers_test_files_under_directory() {
     let dir = std::env::temp_dir().join(format!(
         "nox-cli-test-dir-{}-{}",
@@ -977,6 +1006,135 @@ fn sample_project_supports_project_workflow() {
         String::from_utf8_lossy(&fmt.stderr)
     );
     assert!(fmt.stdout.is_empty());
+}
+
+#[test]
+fn sample_project_manifest_defaults_match_explicit_paths() {
+    let project = fixture("examples/projects/scoreboard")
+        .canonicalize()
+        .unwrap();
+    let main = project.join("src/main.nox");
+    let labels = project.join("src/labels.nox");
+    let runtime_info = project.join("src/runtime_info.nox");
+    let scoring = project.join("src/scoring.nox");
+    let runtime_test = project.join("tests/runtime_info_test.nox");
+    let scoring_test = project.join("tests/scoring_test.nox");
+
+    let manifest_check = nox_command()
+        .current_dir(&project)
+        .args(["check", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_check.stderr)
+    );
+    let manifest_stdout = String::from_utf8_lossy(&manifest_check.stdout);
+    assert!(manifest_stdout.contains("\"summary\":{\"checked\":6,\"passed\":6,\"failed\":0"));
+
+    let explicit_check = nox_command()
+        .current_dir(&project)
+        .args([
+            "check",
+            "--json",
+            main.to_str().unwrap(),
+            labels.to_str().unwrap(),
+            runtime_info.to_str().unwrap(),
+            scoring.to_str().unwrap(),
+            runtime_test.to_str().unwrap(),
+            scoring_test.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        explicit_check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit_check.stderr)
+    );
+    let explicit_stdout = String::from_utf8_lossy(&explicit_check.stdout);
+    assert!(explicit_stdout.contains("\"summary\":{\"checked\":6,\"passed\":6,\"failed\":0"));
+    for path in [
+        &main,
+        &labels,
+        &runtime_info,
+        &scoring,
+        &runtime_test,
+        &scoring_test,
+    ] {
+        let path = path.display().to_string();
+        assert!(
+            manifest_stdout.contains(&path),
+            "manifest check missing {path}"
+        );
+        assert!(
+            explicit_stdout.contains(&path),
+            "explicit check missing {path}"
+        );
+    }
+
+    let manifest_test = nox_command()
+        .current_dir(&project)
+        .args(["test", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_test.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_test.stderr)
+    );
+    let manifest_test_stdout = String::from_utf8_lossy(&manifest_test.stdout);
+    assert!(manifest_test_stdout.contains("\"summary\":{\"tests\":5,\"passed\":5,\"failed\":0}"));
+
+    let explicit_test = nox_command()
+        .current_dir(&project)
+        .args([
+            "test",
+            "--json",
+            runtime_test.to_str().unwrap(),
+            scoring_test.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        explicit_test.status.success(),
+        "{}",
+        String::from_utf8_lossy(&explicit_test.stderr)
+    );
+    let explicit_test_stdout = String::from_utf8_lossy(&explicit_test.stdout);
+    assert!(explicit_test_stdout.contains("\"summary\":{\"tests\":5,\"passed\":5,\"failed\":0}"));
+    for name in [
+        "test_manifest_present",
+        "test_manifest_result",
+        "test_optional_description",
+        "test_total",
+        "test_sqrt_bonus",
+    ] {
+        assert!(
+            manifest_test_stdout.contains(name),
+            "manifest test missing {name}"
+        );
+        assert!(
+            explicit_test_stdout.contains(name),
+            "explicit test missing {name}"
+        );
+    }
+
+    let project_check = nox_command()
+        .current_dir(&project)
+        .args(["project", "check", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        project_check.status.success(),
+        "{}",
+        String::from_utf8_lossy(&project_check.stderr)
+    );
+    let project_stdout = String::from_utf8_lossy(&project_check.stdout);
+    assert!(project_stdout.contains("\"schema\":\"nox.project-check.v1\""));
+    assert!(project_stdout.contains("\"name\":\"check\",\"ok\":true,\"status\":0"));
+    assert!(project_stdout.contains("\"name\":\"test\",\"ok\":true,\"status\":0"));
+    assert!(project_stdout.contains("\"name\":\"fmt\",\"ok\":true,\"status\":0"));
 }
 
 #[test]
@@ -2575,6 +2733,66 @@ fn lsp_supports_scoreboard_project_workflow() {
 }
 
 #[test]
+fn lsp_reports_invalid_manifest_before_module_resolution() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-lsp-invalid-manifest-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(dir.join("nox.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    let main_path = dir.join("src/main.nox");
+    let main_uri = format!("file://{}", main_path.display());
+    let source = "import \"missing.nox\";\n0;\n";
+
+    let input = [
+        lsp_frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"nox","version":1,"text":"{}"}}}}}}"#,
+            main_uri,
+            json_escape(source)
+        )),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#),
+    ]
+    .join("");
+
+    let mut child = nox_command()
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let diagnostics = stdout
+        .split(&format!("\"uri\":\"{main_uri}\""))
+        .nth(1)
+        .expect("main diagnostics should be published");
+    assert!(
+        diagnostics.contains("\"code\":\"manifest.invalid\""),
+        "{stdout}"
+    );
+    assert!(
+        diagnostics.contains("missing required key 'version'"),
+        "{stdout}"
+    );
+    assert!(
+        !diagnostics.contains("\"code\":\"module.not-found\""),
+        "manifest errors should not be hidden behind module resolution: {stdout}"
+    );
+}
+
+#[test]
 fn lsp_hover_returns_expression_type() {
     let source = "let value: int = 42;\nvalue;\n";
     let input = [
@@ -2959,6 +3177,100 @@ fn check_json_reports_invalid_manifest_code() {
         stdout.contains("missing required key 'version'"),
         "{stdout}"
     );
+    assert!(stdout.contains("\"diagnostic_count\":1"), "{stdout}");
+}
+
+#[test]
+fn check_json_reports_manifest_module_dirs_outside_project_root() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-manifest-json-boundary-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("nox.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.0.1\"\n\n[modules]\nsource_dirs = [\"../src\"]\n",
+    )
+    .unwrap();
+    let entry = dir.join("src/main.nox");
+    fs::write(&entry, "0;\n").unwrap();
+
+    let output = nox_command()
+        .args(["check", "--json", entry.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"schema\":\"nox.check.v1\""), "{stdout}");
+    assert!(stdout.contains("\"code\":\"manifest.invalid\""), "{stdout}");
+    assert!(
+        stdout.contains("must stay within the project root"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\"diagnostic_count\":1"), "{stdout}");
+}
+
+#[test]
+fn check_json_reports_missing_project_discovery_code() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-project-discovery-missing-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    let output = nox_command()
+        .current_dir(&dir)
+        .args(["check", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"schema\":\"nox.check.v1\""), "{stdout}");
+    assert!(
+        stdout.contains("\"code\":\"project.discovery\""),
+        "{stdout}"
+    );
+    assert!(stdout.contains("no nox.toml was found"), "{stdout}");
+    assert!(stdout.contains("\"checked\":1"), "{stdout}");
+    assert!(stdout.contains("\"diagnostic_count\":1"), "{stdout}");
+}
+
+#[test]
+fn check_json_reports_missing_manifest_project_dir() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-project-discovery-dir-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("nox.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.0.1\"\n\n[modules]\nsource_dirs = [\"src\"]\n",
+    )
+    .unwrap();
+
+    let output = nox_command()
+        .current_dir(&dir)
+        .args(["check", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"schema\":\"nox.check.v1\""), "{stdout}");
+    assert!(
+        stdout.contains("\"code\":\"project.discovery\""),
+        "{stdout}"
+    );
+    assert!(stdout.contains("path '"), "{stdout}");
+    assert!(stdout.contains("src' does not exist"), "{stdout}");
     assert!(stdout.contains("\"diagnostic_count\":1"), "{stdout}");
 }
 

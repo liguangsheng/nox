@@ -144,7 +144,7 @@ fn bytecode_verifier_rejects_invalid_jump_target() {
         }],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("invalid jump target"));
+    assert_bytecode_verifier_error(&err, "invalid jump target");
 }
 
 #[test]
@@ -155,7 +155,7 @@ fn bytecode_verifier_rejects_stack_underflow() {
         }],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("stack underflow"));
+    assert_bytecode_verifier_error(&err, "stack underflow");
 }
 
 #[test]
@@ -168,7 +168,7 @@ fn bytecode_verifier_rejects_map_stack_underflow() {
         }],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("stack underflow"));
+    assert_bytecode_verifier_error(&err, "stack underflow");
 }
 
 #[test]
@@ -181,7 +181,7 @@ fn bytecode_verifier_rejects_record_stack_underflow() {
         }],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("stack underflow"));
+    assert_bytecode_verifier_error(&err, "stack underflow");
 }
 
 #[test]
@@ -193,7 +193,7 @@ fn bytecode_verifier_rejects_field_stack_underflow() {
         }],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("stack underflow"));
+    assert_bytecode_verifier_error(&err, "stack underflow");
 }
 
 #[test]
@@ -204,7 +204,39 @@ fn bytecode_verifier_rejects_scope_underflow() {
         }],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("scope stack underflow"));
+    assert_bytecode_verifier_error(&err, "scope stack underflow");
+}
+
+#[test]
+fn bytecode_verifier_rejects_branch_exit_scope_underflow() {
+    let module = BytecodeModule {
+        instructions: vec![bytecode::Instruction::BranchExit {
+            exits: 1,
+            target: 1,
+            span: Span { start: 0, end: 0 },
+        }],
+    };
+    let err = bytecode::verify(&module).unwrap_err();
+    assert_bytecode_verifier_error(&err, "branch exit pops more scopes than are open");
+}
+
+#[test]
+fn bytecode_verifier_rejects_malformed_nested_function_body() {
+    let module = BytecodeModule {
+        instructions: vec![bytecode::Instruction::Function {
+            name: "bad".to_string(),
+            params: Vec::new(),
+            return_type: Type::Null,
+            body: BytecodeModule {
+                instructions: vec![bytecode::Instruction::Return {
+                    span: Span { start: 0, end: 0 },
+                }],
+            },
+            span: Span { start: 0, end: 0 },
+        }],
+    };
+    let err = bytecode::verify(&module).unwrap_err();
+    assert_bytecode_verifier_error(&err, "stack underflow");
 }
 
 #[test]
@@ -225,7 +257,7 @@ fn bytecode_verifier_rejects_stack_mismatch_at_branch_join() {
         ],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("stack height mismatch"));
+    assert_bytecode_verifier_error(&err, "stack height mismatch");
 }
 
 #[test]
@@ -243,7 +275,7 @@ fn bytecode_verifier_rejects_scope_mismatch_at_branch_join() {
         ],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("scope depth mismatch"));
+    assert_bytecode_verifier_error(&err, "scope depth mismatch");
 }
 
 #[test]
@@ -269,7 +301,16 @@ fn bytecode_verifier_rejects_incompatible_branches_to_same_target() {
         ],
     };
     let err = bytecode::verify(&module).unwrap_err();
-    assert!(err.message.contains("incompatible branches"));
+    assert_bytecode_verifier_error(&err, "incompatible branches");
+}
+
+fn assert_bytecode_verifier_error(err: &crate::Diagnostic, message: &str) {
+    assert_eq!(err.code, "bytecode.verifier");
+    assert!(
+        err.message.contains(message),
+        "expected {message:?}, got {:?}",
+        err.message
+    );
 }
 
 #[test]
@@ -318,4 +359,36 @@ fn parser_recovers_after_invalid_for_statement() {
     assert_eq!(diagnostics.len(), 2);
     assert!(diagnostics[0].message.contains("expected '{'"));
     assert!(diagnostics[1].message.contains("expected ':'"));
+}
+
+#[test]
+fn parser_handles_large_repeated_malformed_declarations_without_panicking() {
+    let mut source = String::new();
+    for index in 0..256 {
+        source.push_str(&format!("let item_{index} = {index};\n"));
+    }
+
+    let tokens = lex(&source).unwrap();
+    let diagnostics = parse_all(tokens).unwrap_err();
+
+    assert_eq!(diagnostics.len(), 256);
+    assert!(diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code == "parse.expected-token"));
+}
+
+#[test]
+fn type_checker_handles_large_independent_mismatches_without_panicking() {
+    let mut source = String::new();
+    for index in 0..128 {
+        source.push_str(&format!("let item_{index}: int = \"bad-{index}\";\n"));
+    }
+
+    let mut engine = Engine::new();
+    let diagnostics = engine.check_diagnostics(&source).unwrap_err();
+
+    assert_eq!(diagnostics.len(), 128);
+    assert!(diagnostics
+        .iter()
+        .all(|diagnostic| diagnostic.code == "type.mismatch"));
 }

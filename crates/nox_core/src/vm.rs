@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, HashMap},
+    panic::{catch_unwind, AssertUnwindSafe},
     rc::Rc,
 };
 
@@ -553,16 +554,36 @@ impl Vm {
                 }
             }
             FunctionKind::Host { callback } => {
-                let value = callback(&args).map_err(|err| {
+                let result =
+                    catch_unwind(AssertUnwindSafe(|| callback(&args))).map_err(|panic| {
+                        let message = if let Some(message) = panic.downcast_ref::<&str>() {
+                            *message
+                        } else if let Some(message) = panic.downcast_ref::<String>() {
+                            message.as_str()
+                        } else {
+                            "unknown panic payload"
+                        };
+                        Diagnostic::new(
+                            format!(
+                                "host function '{}': host callback panicked: {message}",
+                                function.name
+                            ),
+                            span,
+                        )
+                        .with_code("host.callback")
+                    })?;
+                let value = result.map_err(|mut err| {
+                    if err.code == "error" {
+                        err.code = "host.callback";
+                    }
                     if err.message.contains("host function")
                         || err.message.contains("host callback")
                     {
                         err
                     } else {
-                        Diagnostic::new(
-                            format!("host function '{}': {}", function.name, err.message),
-                            span,
-                        )
+                        err.message = format!("host function '{}': {}", function.name, err.message);
+                        err.span = span;
+                        err
                     }
                 })?;
                 let actual = value_type(&value);

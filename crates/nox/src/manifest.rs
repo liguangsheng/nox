@@ -1,6 +1,7 @@
 use std::{
+    collections::BTreeSet,
     fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use nox_core::{Diagnostic, Span};
@@ -130,10 +131,10 @@ impl Manifest {
         let mut modules = Modules::default();
         if let Some(section) = document.section("modules") {
             if let Some(values) = section.require_string_array("source_dirs")? {
-                modules.source_dirs = values.into_iter().map(PathBuf::from).collect();
+                modules.source_dirs = validate_relative_paths("modules.source_dirs", values)?;
             }
             if let Some(values) = section.require_string_array("test_dirs")? {
-                modules.test_dirs = values.into_iter().map(PathBuf::from).collect();
+                modules.test_dirs = validate_relative_paths("modules.test_dirs", values)?;
             }
         }
 
@@ -200,6 +201,44 @@ fn parse_runtime_permission(value: &str) -> Result<RuntimePermissionDecl, Diagno
 
 fn manifest_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(message, Span { start: 0, end: 0 }).with_code("manifest.invalid")
+}
+
+fn validate_relative_paths(key: &str, values: Vec<String>) -> Result<Vec<PathBuf>, Diagnostic> {
+    let mut seen = BTreeSet::new();
+    let mut paths = Vec::new();
+    for value in values {
+        let path = PathBuf::from(&value);
+        if path.as_os_str().is_empty() {
+            return Err(manifest_error(format!(
+                "manifest key '{key}' contains an empty path"
+            )));
+        }
+        let mut normalized = PathBuf::new();
+        for component in path.components() {
+            match component {
+                Component::Normal(part) => normalized.push(part),
+                Component::CurDir => {}
+                Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+                    return Err(manifest_error(format!(
+                        "manifest key '{key}' path '{value}' must stay within the project root"
+                    )));
+                }
+            }
+        }
+        if path.is_absolute() || normalized.as_os_str().is_empty() {
+            return Err(manifest_error(format!(
+                "manifest key '{key}' path '{value}' must stay within the project root"
+            )));
+        }
+        if !seen.insert(normalized.clone()) {
+            return Err(manifest_error(format!(
+                "manifest key '{key}' contains duplicate path '{}'",
+                normalized.display()
+            )));
+        }
+        paths.push(normalized);
+    }
+    Ok(paths)
 }
 
 struct TomlDocument {
@@ -599,6 +638,57 @@ test_dirs = "tests"
 "#;
         let err = Manifest::parse(source, root()).unwrap_err();
         assert!(err.message.contains("modules.test_dirs"));
+    }
+
+    #[test]
+    fn rejects_module_dirs_outside_project_root() {
+        for (source, message) in [
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[modules]
+source_dirs = ["/tmp/nox-src"]
+"#,
+                "must stay within the project root",
+            ),
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[modules]
+test_dirs = ["../tests"]
+"#,
+                "must stay within the project root",
+            ),
+        ] {
+            let err = Manifest::parse(source, root()).unwrap_err();
+            assert_eq!(err.code, "manifest.invalid");
+            assert!(
+                err.message.contains(message),
+                "expected {message:?}, got {:?}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_module_dirs() {
+        let source = r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[modules]
+source_dirs = ["src", "./src"]
+"#;
+        let err = Manifest::parse(source, root()).unwrap_err();
+        assert_eq!(err.code, "manifest.invalid");
+        assert!(err.message.contains("duplicate path 'src'"));
     }
 
     #[test]

@@ -6,14 +6,76 @@
 
 ## [未发布]
 
-### 改进
+## [0.0.2] — 2026-05-22
 
+本版本紧接 `v0.0.1` 基线，汇总当前 `main` 上已经完成且对外可见的能力与发布硬化。
+此前内部计划中拆分过后续开发记录，但这些内部编号不作为已发布 tag。
+
+### 稳定和兼容改进
+
+- 诊断：runtime 权限未授予和文件系统 allowlist 拒绝现在使用稳定 code
+  `permission.denied`，并保留 host function 包装后的原始诊断 code。
+- 诊断：未细分的 host callback 错误现在使用稳定 code `host.callback`；宿主返回的
+  更具体 code 会继续保留。
+- 诊断：bytecode verifier 拒绝非法跳转、栈/作用域深度不一致和 malformed bytecode 时
+  现在使用稳定 code `bytecode.verifier`，并覆盖 branch exit scope underflow 与嵌套函数体
+  malformed bytecode 回归。
+- 运行时：文件系统 write allowlist 对尚不存在的目标文件会解析最近的已存在父路径，
+  防止通过 allowlist 内部 symlink 写入外部目录。
+- 运行时：`env_list()` 读取进程环境时现在显式处理非 Unicode 名称或值，返回诊断而不是
+  让底层环境迭代 panic。
+- Runtime API：新增 `Runtime::set_instruction_budget`，并覆盖 instruction budget 耗尽时
+  清理本次调用中新建 pending async task、host callback 返回后继续受预算约束的回归。
+- Embedding：Rust host callback panic 现在会被隔离成 `host.callback` 诊断，`Engine`
+  可在诊断后继续复用。
+- Embedding：新增 C ABI option/result handle 生命周期回归，覆盖嵌套 heap 值保活和释放。
+- Manifest：`modules.source_dirs` 和 `modules.test_dirs` 现在拒绝绝对路径、`..` 逃逸项目根
+  和重复目录，CLI JSON 会以稳定 `manifest.invalid` 报告这些项目边界错误。
+- CLI：`nox check --json` 在项目发现失败时仍输出 `nox.check.v1`，并用稳定 code
+  `project.discovery` 标记缺少 manifest 或 manifest 展开路径不存在这类项目配置错误。
+- CLI：scoreboard sample project 新增 manifest 默认发现与显式 path 列表的一致性回归，覆盖
+  `check --json`、`test --json` 和 `project check --json`。
+- LSP：打开文件所在项目的 manifest 无效时，现在优先发布 `manifest.invalid` diagnostic，避免
+  将配置错误隐藏成 module resolution 失败。
 - 诊断：manifest 解析和 schema 错误现在使用稳定 code `manifest.invalid`，并覆盖
   Rust manifest tests 与 CLI `check --json`。
-- 版本：本地开发阶段版本号改为只推进修订号，例如 `v0.0.7`、`v0.0.6` 和
+
+### 工具和验证
+
+- 工具：embedding regression 现在检查 `nox_core.h` 声明的 C ABI 函数是否由动态库实际导出。
+- 稳定性：parser/type checker 新增生成式大输入负向回归，覆盖重复 malformed declaration
+  和大量独立 type mismatch 不 panic 且诊断 code 稳定。
+- 稳定性：新增模块返回容器值被 Rust 宿主持有再释放的 heap 压力回归，和既有 C ABI
+  handle 释放回归一起覆盖复合值 GC 路径。
+- 工具：benchmark smoke 现在断言每个 case 的预期输出片段，并在可用时给单个 case 加默认
+  10 秒 timeout，避免卡死或跑错路径被误判为基线。
+- 工具：CI 的 Rust toolchain 安装命令修正为分别声明 `rustfmt` 和 `clippy` component；
+  `env_list` 相关测试共享环境变量锁，避免并发测试读取到非 Unicode 临时环境变量。
+
+### 文档和发布流程
+
+- 文档：`docs/embedding.md` 新增 Rust API 分层表，明确稳定入口、工具/实验表面和内部不承诺边界。
+- 文档：`docs/embedding.md` 新增 C ABI 兼容矩阵，记录 enum 数值、handle ownership、
+  error string 生命周期和 callback 边界，并用测试固定 enum 数值。
+- 文档：embedding 指南明确 Rust/C host callback 的错误、panic/unwind、线程和重入边界。
+- 文档：README 新增当前 `0.0.x` 本地 checkpoint 状态、生产边界说明和本地构建入口，并复核快速开始命令。
+- 文档：同步 language/runtime 文档与当前实现，补全稳定 diagnostic code 列表，并修正文件系统
+  allowlist 边界说明。
+- 文档：release checklist 扩展回滚流程，覆盖保留 tag、标记撤回 release、hotfix、资产替换和下游升级路径。
+- 版本：本地开发阶段版本号改为只推进修订号，例如 `v0.0.2`、`v0.0.3` 和
   `v0.0.3-alpha`；不再使用次版本号推进写法。
 
-## [0.0.6] — 2026-05-22
+### 暂缓和边界
+
+- 继续暂缓脚本级 async task status API、C ABI task status、源码级函数类型、高阶函数、
+  mutable array、slice、package registry、watch mode 和 daemon。当前文档记录了重新启动条件。
+
+### Breaking changes
+
+- 本批未引入已知 breaking change。`0.0.x` 本地开发阶段仍允许公共表面调整；任何后续破坏性变更
+  必须在本节、相关文档和 ADR 中明确标出。
+
+## 0.0.6 内部开发记录 — 2026-05-22
 
 ### 改进
 
@@ -28,7 +90,7 @@
 - 文档：新增 ADR 0016，明确 v0.0.6 暂缓脚本级 async task status API，并记录
   `TaskStatus`、id 生命周期、unknown id 和 C ABI 的重新启动条件。
 
-## [0.0.5] — 2026-05-21
+## 0.0.5 内部开发记录 — 2026-05-21
 
 ### 新增
 
@@ -41,7 +103,7 @@
 - 工具：release gate 和本地分发 smoke 增加 `map_get` 示例覆盖，release checklist
   切到 v0.0.5 流程。
 
-## [0.0.4] — 2026-05-21
+## 0.0.4 内部开发记录 — 2026-05-21
 
 ### 新增
 
@@ -64,7 +126,7 @@
 - 文档：`docs/embedding.md` 新增长期宿主 cookbook，说明 host callback 错误、
   `RuntimePermissions`、可恢复文件读取和 C ABI handle ownership。
 
-## [0.0.3] — 2026-05-21
+## 0.0.3 内部开发记录 — 2026-05-21
 
 ### 新增
 
@@ -110,7 +172,7 @@
 - Heap 模型复审结论：v0.0.3 继续使用 `Rc + Weak` 加弱引用追踪表，不引入 tracing GC、
   arena handle 或 cycle collector。
 
-## [0.0.2] — 2026-05-21
+## 0.0.2 早期开发记录 — 2026-05-21
 
 本版本汇总 v0.0.2 路径中已经在 `main` 上交付的对外可见能力。
 

@@ -156,6 +156,22 @@ fn run_check(raw_args: Vec<String>) -> i32 {
     let paths = match discover_check_files(&paths) {
         Ok(paths) => paths,
         Err(err) => {
+            if json {
+                let diagnostic = project_discovery_diagnostic(err);
+                println!(
+                    "{}",
+                    diagnostics_json(
+                        false,
+                        &[("<project>".to_string(), diagnostic)],
+                        &[CheckFileReport {
+                            path: "<project>".to_string(),
+                            ok: false,
+                            diagnostic_count: 1,
+                        }],
+                    )
+                );
+                return 2;
+            }
             eprintln!("check: {err}");
             return 2;
         }
@@ -520,6 +536,10 @@ fn is_test_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
         .is_some_and(|name| name.ends_with("_test.nox"))
+}
+
+fn project_discovery_diagnostic(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(message, nox_core::Span { start: 0, end: 0 }).with_code("project.discovery")
 }
 
 enum FmtMode {

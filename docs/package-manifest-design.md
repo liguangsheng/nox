@@ -61,9 +61,11 @@ permissions = ["filesystem.read"]
   `nox run` 无显式路径时会使用该入口。
 - `entrypoints.<name>`：可选命名入口。当前只解析和保留，不自动执行；后续 CLI 可以
   在不改变 manifest 形状的前提下接入命名入口。
-- `modules.source_dirs`：可选字符串数组，相对 manifest 所在目录。
+- `modules.source_dirs`：可选字符串数组，相对 manifest 所在目录，不能使用绝对路径或
+  `..` 逃逸项目根，重复目录会被拒绝。
   import 解析在相对当前文件失败时，会按数组顺序尝试这些目录。
-- `modules.test_dirs`：可选字符串数组，相对 manifest 所在目录。`nox test` 无显式路径时
+- `modules.test_dirs`：可选字符串数组，相对 manifest 所在目录，不能使用绝对路径或
+  `..` 逃逸项目根，重复目录会被拒绝。`nox test` 无显式路径时
   优先递归发现这些目录下的 `*_test.nox`；未配置时回退到 `source_dirs`，再回退到项目根。
 - `runtime.permissions`：可选字符串数组。允许值为 `filesystem.read`、`filesystem.write`、
   `network`、`timers`、`environment`、`async_tasks`。这些值只声明项目期望能力，不会让
@@ -76,7 +78,8 @@ permissions = ["filesystem.read"]
   内联表、布尔）当前都不支持，遇到时返回诊断。
 - `[package]` 必须包含 `name` 和 `version`；`description` 可选。
 - `[entrypoints]` 中所有键都必须是字符串。`main` 是默认入口，其他键作为命名入口保留。
-- `[modules]` 中 `source_dirs` 和 `test_dirs` 都必须是字符串数组。
+- `[modules]` 中 `source_dirs` 和 `test_dirs` 都必须是字符串数组，路径必须留在项目根内且
+  单个数组内不能重复。
 - `[runtime]` 中 `permissions` 必须是字符串数组，未知权限名返回诊断。
 - 字符串里目前不支持嵌入 `"`；如有特殊需要请使用更简单的标识符。
 - 注释以 `#` 开头，到行尾结束。字符串中的 `#` 不视为注释。

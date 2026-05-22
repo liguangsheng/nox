@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     })?;
 
     let err = engine.eval("host_config();").unwrap_err();
-    assert_eq!(err.code, "error");
+    assert_eq!(err.code, "host.callback");
     assert!(err.message.contains("host function 'host_config'"));
 
     let dir = env::temp_dir().join(format!("nox-rust-embedding-{}", std::process::id()));

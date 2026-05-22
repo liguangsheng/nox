@@ -73,12 +73,16 @@ run_gate "CLI map_get smoke" env NOX_BIN="$NOX_BIN" sh -eu -c 'output=$("$NOX_BI
 run_gate "CLI map_get bytecode smoke" env NOX_BIN="$NOX_BIN" sh -eu -c '"$NOX_BIN" inspect-bytecode --compact examples/maps.nox | grep -q MapGet'
 run_gate_in_dir "scoreboard project check" examples/projects/scoreboard "$NOX_BIN" project check
 run_gate_in_dir "scoreboard project check JSON" examples/projects/scoreboard "$NOX_BIN" project check --json
+run_gate_in_dir "scoreboard test JSON" examples/projects/scoreboard "$NOX_BIN" test --json
+run_gate_in_dir "scoreboard fmt check" examples/projects/scoreboard "$NOX_BIN" fmt --check
 run_gate "scoreboard std module check" "$NOX_BIN" check examples/projects/scoreboard/src/runtime_info.nox
 run_gate "scoreboard std module fmt" "$NOX_BIN" fmt --check examples/projects/scoreboard/src/runtime_info.nox
 
 run_gate "embedding regression" scripts/embedding-regression.sh
 run_gate "robustness smoke" scripts/robustness-smoke.sh
 run_gate "benchmark smoke" env -u NOX_BIN scripts/bench-smoke.sh
+
+run_gate "production release audit blocker smoke" env NOX_RELEASE_AUDIT_EXPECT_BLOCKED=1 scripts/release-audit.sh
 
 run_gate "Markdown link check" python3 -c 'import pathlib,re,sys
 roots=[pathlib.Path(p) for p in ["README.md","README_zh_CN.md","docs","examples/README.md"]]

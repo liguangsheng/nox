@@ -409,6 +409,10 @@ pub(crate) fn verify(module: &BytecodeModule) -> Result<(), Diagnostic> {
     Verifier::new(module).verify()
 }
 
+fn verifier_error(message: impl Into<String>, span: Span) -> Diagnostic {
+    Diagnostic::new(message, span).with_code("bytecode.verifier")
+}
+
 struct Verifier<'a> {
     module: &'a BytecodeModule,
     stack_depth: isize,
@@ -439,7 +443,7 @@ impl<'a> Verifier<'a> {
             self.update_reachability(instruction);
         }
         if self.scope_depth != 0 {
-            return Err(Diagnostic::new(
+            return Err(verifier_error(
                 "bytecode verifier: unbalanced scope stack",
                 Span { start: 0, end: 0 },
             ));
@@ -467,7 +471,7 @@ impl<'a> Verifier<'a> {
             Some((expected_stack, expected_scope)) => {
                 if self.reachable {
                     if expected_stack != self.stack_depth {
-                        return Err(Diagnostic::new(
+                        return Err(verifier_error(
                             format!(
                                 "bytecode verifier: stack height mismatch at join target {index}: branch enters with {expected_stack}, fallthrough has {}",
                                 self.stack_depth
@@ -476,7 +480,7 @@ impl<'a> Verifier<'a> {
                         ));
                     }
                     if expected_scope != self.scope_depth {
-                        return Err(Diagnostic::new(
+                        return Err(verifier_error(
                             format!(
                                 "bytecode verifier: scope depth mismatch at join target {index}: branch enters with {expected_scope}, fallthrough has {}",
                                 self.scope_depth
@@ -519,7 +523,7 @@ impl<'a> Verifier<'a> {
     ) -> Result<(), Diagnostic> {
         if let Some(existing) = self.join_states.get(&target).copied() {
             if existing != (stack_depth, scope_depth) {
-                return Err(Diagnostic::new(
+                return Err(verifier_error(
                     format!(
                         "bytecode verifier: incompatible branches to target {target}: previously stack={}, scope={}, now stack={stack_depth}, scope={scope_depth}",
                         existing.0, existing.1
@@ -621,7 +625,7 @@ impl<'a> Verifier<'a> {
                 span,
             } => {
                 if (*exits as isize) > self.scope_depth {
-                    return Err(Diagnostic::new(
+                    return Err(verifier_error(
                         "bytecode verifier: branch exit pops more scopes than are open",
                         *span,
                     ));
@@ -631,7 +635,7 @@ impl<'a> Verifier<'a> {
                 self.record_join_state(*target, self.stack_depth, target_scope, *span)?;
             }
             Instruction::BreakPlaceholder { span } | Instruction::ContinuePlaceholder { span } => {
-                return Err(Diagnostic::new(
+                return Err(verifier_error(
                     "bytecode verifier: 'break' or 'continue' outside of a loop",
                     *span,
                 ));
@@ -640,7 +644,7 @@ impl<'a> Verifier<'a> {
             Instruction::EndScope { span } => {
                 self.scope_depth -= 1;
                 if self.scope_depth < 0 {
-                    return Err(Diagnostic::new(
+                    return Err(verifier_error(
                         "bytecode verifier: scope stack underflow",
                         *span,
                     ));
@@ -657,7 +661,7 @@ impl<'a> Verifier<'a> {
 
     fn verify_target(&self, index: usize, target: usize, span: Span) -> Result<(), Diagnostic> {
         if target > self.module.instructions.len() {
-            return Err(Diagnostic::new(
+            return Err(verifier_error(
                 format!("bytecode verifier: invalid jump target {target} from {index}"),
                 span,
             ));
@@ -667,7 +671,7 @@ impl<'a> Verifier<'a> {
 
     fn require(&self, count: usize, span: Span) -> Result<(), Diagnostic> {
         if self.stack_depth < count as isize {
-            return Err(Diagnostic::new("bytecode verifier: stack underflow", span));
+            return Err(verifier_error("bytecode verifier: stack underflow", span));
         }
         Ok(())
     }

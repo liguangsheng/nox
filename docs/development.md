@@ -91,7 +91,8 @@ print("markdown links ok")'
 - lexer 和 span。
 - parser 恢复和多条语法诊断。
 - AST 到 bytecode 编译。
-- verifier 对非法 jump、stack underflow、scope underflow、map/record/field stack effect 的拒绝。
+- verifier 对非法 jump、stack underflow、scope underflow、branch exit scope underflow、
+  nested function malformed bytecode、map/record/field stack effect 的拒绝。
 - bytecode inspect。
 
 `crates/nox_core/src/language_tests.rs` 覆盖：
@@ -125,7 +126,8 @@ scripts/bench-smoke.sh
 
 该脚本输出 release CLI 的 tab-separated 耗时，覆盖递归、循环、容器、模块加载和
 `nox test`。`.nox` benchmark 会记录 `check`、`compile`、`e2e` 三类 CLI 阶段代理；
-`nox test` 记录端到端耗时。数字只用于同机前后对比，不作为 CI 硬门禁。
+`nox test` 记录端到端耗时。脚本断言预期输出片段，并在系统支持 `timeout` 时默认限制单个
+case 10 秒。数字只用于同机前后对比，不作为 CI 硬门禁。
 
 Malformed source smoke：
 
@@ -139,6 +141,10 @@ manifest 错误和 LSP 半截源码。语法/词法错误要求 `check` 与 `fmt
 静态类型错误要求 `check` 返回 `1` 且 `fmt` 返回 `0`；manifest 配置错误当前是 CLI
 用法/项目发现层错误，要求返回 `2`；LSP 半截源码要求 stdio session 正常退出 `0` 并发布
 diagnostics。其它退出码视为回归，尤其用于捕捉 panic。
+
+`nox_core` 还包含生成式大输入回归，覆盖大量重复 malformed declaration 和独立 type mismatch。
+这些测试不进入 `examples/malformed/`，避免把机械 corpus 变成用户示例；验证入口是
+`cargo test -p nox_core parser`。
 
 新增 robustness corpus 时按错误边界分类：
 

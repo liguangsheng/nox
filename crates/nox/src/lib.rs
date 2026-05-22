@@ -426,6 +426,10 @@ impl Runtime {
         self.task_runtime.borrow().pending_count()
     }
 
+    pub fn set_instruction_budget(&mut self, budget: Option<usize>) {
+        self.engine.set_instruction_budget(budget);
+    }
+
     pub fn eval(&mut self, source: &str) -> Result<Value, Diagnostic> {
         let first_task_id = self.task_runtime.borrow().next_id();
         let result = self.engine.eval(source);
@@ -589,10 +593,7 @@ impl Runtime {
 
     fn prepare_file_source(&mut self, path: &Path) -> Result<String, Diagnostic> {
         if !self.permissions.filesystem {
-            return Err(Diagnostic::new(
-                "filesystem capability is required to evaluate files",
-                Span { start: 0, end: 0 },
-            ));
+            return Err(capability_required("filesystem", "evaluate files"));
         }
 
         let base = path
@@ -683,6 +684,20 @@ fn read_module(path: &Path) -> Result<String, Diagnostic> {
     })
 }
 
+fn permission_denied(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(message, Span { start: 0, end: 0 }).with_code("permission.denied")
+}
+
+fn capability_required(capability: &str, operation: &str) -> Diagnostic {
+    permission_denied(format!(
+        "{capability} capability is required to {operation}"
+    ))
+}
+
+fn call_capability_required(capability: &str, function: &str) -> Diagnostic {
+    capability_required(capability, &format!("call {function}"))
+}
+
 fn check_filesystem_read(path: &Path, roots: &[PathBuf]) -> Result<(), Diagnostic> {
     check_filesystem_access(path, roots, "read")
 }
@@ -708,13 +723,10 @@ fn check_filesystem_access(
         }
     }
 
-    Err(Diagnostic::new(
-        format!(
-            "filesystem {operation} permission denied for '{}'",
-            path.display()
-        ),
-        Span { start: 0, end: 0 },
-    ))
+    Err(permission_denied(format!(
+        "filesystem {operation} permission denied for '{}'",
+        path.display()
+    )))
 }
 
 fn validate_runtime_path(path: &Path) -> Result<(), Diagnostic> {
@@ -755,7 +767,30 @@ fn normalize_runtime_path(path: &Path) -> Result<PathBuf, Diagnostic> {
             })?
             .join(path)
     };
-    Ok(normalize_lexical(&absolute))
+    Ok(normalize_missing_path(&absolute))
+}
+
+fn normalize_missing_path(path: &Path) -> PathBuf {
+    let lexical = normalize_lexical(path);
+    let mut probe = lexical.as_path();
+    let mut suffix = Vec::new();
+
+    loop {
+        if let Ok(mut canonical) = fs::canonicalize(probe) {
+            for component in suffix.iter().rev() {
+                canonical.push(component);
+            }
+            return normalize_lexical(&canonical);
+        }
+        let Some(name) = probe.file_name() else {
+            return lexical;
+        };
+        suffix.push(name.to_os_string());
+        let Some(parent) = probe.parent() else {
+            return lexical;
+        };
+        probe = parent;
+    }
 }
 
 fn normalize_lexical(path: &Path) -> PathBuf {
@@ -790,6 +825,26 @@ fn read_optional_env(name: &str) -> Result<Value, Diagnostic> {
     }
 }
 
+fn read_environment_map() -> Result<BTreeMap<String, Value>, Diagnostic> {
+    let mut entries = BTreeMap::new();
+    for (key, value) in env::vars_os() {
+        let key = key.into_string().map_err(|_| {
+            Diagnostic::new(
+                "failed to read environment variable name: not valid unicode",
+                Span { start: 0, end: 0 },
+            )
+        })?;
+        let value = value.into_string().map_err(|_| {
+            Diagnostic::new(
+                format!("failed to read environment variable '{key}': not valid unicode"),
+                Span { start: 0, end: 0 },
+            )
+        })?;
+        entries.insert(key, Value::string(value));
+    }
+    Ok(entries)
+}
+
 fn read_text_result(path: &str, roots: &[PathBuf]) -> Result<Value, Diagnostic> {
     let path_ref = Path::new(path);
     check_filesystem_read(path_ref, roots)?;
@@ -811,10 +866,7 @@ fn install_std_module_aliases(engine: &mut Engine, permissions: &RuntimePermissi
             HostFunctionBuilder::new("__nox_std_fs_read_text", Type::Str).param("path", Type::Str),
             move |args| {
                 if !filesystem_read_allowed {
-                    return Err(Diagnostic::new(
-                        "filesystem capability is required to call read_text",
-                        Span { start: 0, end: 0 },
-                    ));
+                    return Err(call_capability_required("filesystem", "read_text"));
                 }
                 match args {
                     [Value::String(path)] => {
@@ -849,10 +901,7 @@ fn install_std_module_aliases(engine: &mut Engine, permissions: &RuntimePermissi
             .param("path", Type::Str),
             move |args| {
                 if !filesystem_read_allowed {
-                    return Err(Diagnostic::new(
-                        "filesystem capability is required to call try_read_text",
-                        Span { start: 0, end: 0 },
-                    ));
+                    return Err(call_capability_required("filesystem", "try_read_text"));
                 }
                 match args {
                     [Value::String(path)] => {
@@ -871,10 +920,7 @@ fn install_std_module_aliases(engine: &mut Engine, permissions: &RuntimePermissi
             HostFunctionBuilder::new("__nox_std_fs_exists", Type::Bool).param("path", Type::Str),
             move |args| {
                 if !filesystem_read_allowed {
-                    return Err(Diagnostic::new(
-                        "filesystem capability is required to call exists",
-                        Span { start: 0, end: 0 },
-                    ));
+                    return Err(call_capability_required("filesystem", "exists"));
                 }
                 match args {
                     [Value::String(path)] => {
@@ -897,10 +943,7 @@ fn install_std_module_aliases(engine: &mut Engine, permissions: &RuntimePermissi
                 .param("contents", Type::Str),
             move |args| {
                 if !filesystem_write_allowed {
-                    return Err(Diagnostic::new(
-                        "filesystem write capability is required to call write_text",
-                        Span { start: 0, end: 0 },
-                    ));
+                    return Err(call_capability_required("filesystem write", "write_text"));
                 }
                 match args {
                     [Value::String(path), Value::String(contents)] => {
@@ -927,10 +970,7 @@ fn install_std_module_aliases(engine: &mut Engine, permissions: &RuntimePermissi
             HostFunctionBuilder::new("__nox_std_env_get", Type::Str).param("name", Type::Str),
             move |args| {
                 if !environment_allowed {
-                    return Err(Diagnostic::new(
-                        "environment capability is required to call env_get",
-                        Span { start: 0, end: 0 },
-                    ));
+                    return Err(call_capability_required("environment", "env_get"));
                 }
 
                 match args {
@@ -955,10 +995,7 @@ fn install_std_module_aliases(engine: &mut Engine, permissions: &RuntimePermissi
                 .param("name", Type::Str),
             move |args| {
                 if !environment_allowed {
-                    return Err(Diagnostic::new(
-                        "environment capability is required to call env_try_get",
-                        Span { start: 0, end: 0 },
-                    ));
+                    return Err(call_capability_required("environment", "env_try_get"));
                 }
 
                 match args {
@@ -975,16 +1012,10 @@ fn install_std_module_aliases(engine: &mut Engine, permissions: &RuntimePermissi
             HostFunctionBuilder::new("__nox_std_env_list", Type::Map(Box::new(Type::Str))),
             move |_| {
                 if !environment_allowed {
-                    return Err(Diagnostic::new(
-                        "environment capability is required to call env_list",
-                        Span { start: 0, end: 0 },
-                    ));
+                    return Err(call_capability_required("environment", "env_list"));
                 }
 
-                let entries = env::vars()
-                    .map(|(key, value)| (key, Value::string(value)))
-                    .collect::<BTreeMap<_, _>>();
-                Ok(Value::map(Type::Str, entries))
+                read_environment_map().map(|entries| Value::map(Type::Str, entries))
             },
         )
         .expect("stdlib function registration is static");
@@ -995,10 +1026,7 @@ fn install_std_module_aliases(engine: &mut Engine, permissions: &RuntimePermissi
             HostFunctionBuilder::new("__nox_std_time_sleep_ms", Type::Null).param("ms", Type::Int),
             move |args| {
                 if !timers_allowed {
-                    return Err(Diagnostic::new(
-                        "timer capability is required to call sleep_ms",
-                        Span { start: 0, end: 0 },
-                    ));
+                    return Err(call_capability_required("timer", "sleep_ms"));
                 }
 
                 match args {
@@ -1049,10 +1077,7 @@ impl Runtime {
                 HostFunctionBuilder::new("read_text", Type::Str).param("path", Type::Str),
                 move |args| {
                     if !filesystem_read_allowed {
-                        return Err(Diagnostic::new(
-                            "filesystem capability is required to call read_text",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("filesystem", "read_text"));
                     }
                     match args {
                         [Value::String(path)] => {
@@ -1080,10 +1105,7 @@ impl Runtime {
                 HostFunctionBuilder::new("exists", Type::Bool).param("path", Type::Str),
                 move |args| {
                     if !filesystem_read_allowed {
-                        return Err(Diagnostic::new(
-                            "filesystem capability is required to call exists",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("filesystem", "exists"));
                     }
                     match args {
                         [Value::String(path)] => {
@@ -1106,10 +1128,7 @@ impl Runtime {
                     .param("contents", Type::Str),
                 move |args| {
                     if !filesystem_write_allowed {
-                        return Err(Diagnostic::new(
-                            "filesystem write capability is required to call write_text",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("filesystem write", "write_text"));
                     }
                     match args {
                         [Value::String(path), Value::String(contents)] => {
@@ -1136,10 +1155,7 @@ impl Runtime {
                 HostFunctionBuilder::new("env_get", Type::Str).param("name", Type::Str),
                 move |args| {
                     if !environment_allowed {
-                        return Err(Diagnostic::new(
-                            "environment capability is required to call env_get",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("environment", "env_get"));
                     }
 
                     match args {
@@ -1163,16 +1179,10 @@ impl Runtime {
                 HostFunctionBuilder::new("env_list", Type::Map(Box::new(Type::Str))),
                 move |_| {
                     if !environment_allowed {
-                        return Err(Diagnostic::new(
-                            "environment capability is required to call env_list",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("environment", "env_list"));
                     }
 
-                    let entries = env::vars()
-                        .map(|(key, value)| (key, Value::string(value)))
-                        .collect::<BTreeMap<_, _>>();
-                    Ok(Value::map(Type::Str, entries))
+                    read_environment_map().map(|entries| Value::map(Type::Str, entries))
                 },
             )
             .expect("stdlib function registration is static");
@@ -1183,10 +1193,7 @@ impl Runtime {
                 HostFunctionBuilder::new("sleep_ms", Type::Null).param("ms", Type::Int),
                 move |args| {
                     if !timers_allowed {
-                        return Err(Diagnostic::new(
-                            "timer capability is required to call sleep_ms",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("timer", "sleep_ms"));
                     }
 
                     match args {
@@ -1212,10 +1219,7 @@ impl Runtime {
                     .param("port", Type::Int),
                 move |args| {
                     if !network_allowed {
-                        return Err(Diagnostic::new(
-                            "network capability is required to call tcp_connect",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("network", "tcp_connect"));
                     }
 
                     match args {
@@ -1242,10 +1246,7 @@ impl Runtime {
                 HostFunctionBuilder::new("task_sleep_ms", Type::Int).param("ms", Type::Int),
                 move |args| {
                     if !async_allowed {
-                        return Err(Diagnostic::new(
-                            "async task capability is required to call task_sleep_ms",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("async task", "task_sleep_ms"));
                     }
 
                     match args {
@@ -1272,10 +1273,7 @@ impl Runtime {
                 HostFunctionBuilder::new("task_ready", Type::Bool).param("id", Type::Int),
                 move |args| {
                     if !async_allowed {
-                        return Err(Diagnostic::new(
-                            "async task capability is required to call task_ready",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("async task", "task_ready"));
                     }
 
                     match args {
@@ -1303,10 +1301,7 @@ impl Runtime {
                 HostFunctionBuilder::new("task_cancel", Type::Null).param("id", Type::Int),
                 move |args| {
                     if !async_allowed {
-                        return Err(Diagnostic::new(
-                            "async task capability is required to call task_cancel",
-                            Span { start: 0, end: 0 },
-                        ));
+                        return Err(call_capability_required("async task", "task_cancel"));
                     }
 
                     match args {
@@ -1335,6 +1330,13 @@ impl Runtime {
 mod tests {
     use super::*;
     use nox_core::Session;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn env_test_lock() -> MutexGuard<'static, ()> {
+        ENV_TEST_LOCK.lock().unwrap_or_else(|err| err.into_inner())
+    }
 
     #[test]
     fn runtime_exposes_minimal_stdlib() {
@@ -1503,6 +1505,7 @@ describe_read("{}");
             environment: true,
             ..RuntimePermissions::none()
         });
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
         let value = runtime.eval_file(&script).unwrap();
         assert_eq!(value.to_string(), "none");
     }
@@ -1597,12 +1600,14 @@ describe_read("{}");
     fn environment_stdlib_requires_capability() {
         let mut runtime = Runtime::new();
         let err = runtime.eval(r#"env_get("PATH");"#).unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("environment capability"));
     }
 
     #[test]
     fn environment_stdlib_reads_when_allowed() {
         let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            filesystem: true,
             environment: true,
             ..RuntimePermissions::none()
         });
@@ -1614,17 +1619,96 @@ describe_read("{}");
     fn env_list_requires_capability() {
         let mut runtime = Runtime::new();
         let err = runtime.eval("env_list();").unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("environment capability"));
     }
 
     #[test]
     fn env_list_returns_environment_map_when_allowed() {
+        let _guard = env_test_lock();
         let mut runtime = Runtime::with_permissions(RuntimePermissions {
             environment: true,
             ..RuntimePermissions::none()
         });
         let value = runtime.eval(r#"contains(env_list(), "PATH");"#).unwrap();
         assert_eq!(value, Value::Bool(true));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn environment_non_utf8_values_are_diagnostics() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let _guard = env_test_lock();
+        let key = format!("NOX_NON_UTF8_ENV_{}_{}", std::process::id(), line!());
+        let previous = env::var_os(&key);
+        unsafe {
+            env::set_var(&key, OsString::from_vec(vec![0xff]));
+        }
+
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            filesystem: true,
+            environment: true,
+            ..RuntimePermissions::none()
+        });
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+
+        let env_get_message = runtime
+            .eval(&format!(r#"env_get("{key}");"#))
+            .unwrap_err()
+            .message;
+
+        let try_get_message = runtime
+            .eval(&format!(
+                r#"import "std/env.nox" as env; env.try_get("{key}");"#
+            ))
+            .unwrap_err()
+            .message;
+
+        match previous {
+            Some(value) => unsafe { env::set_var(&key, value) },
+            None => unsafe { env::remove_var(&key) },
+        }
+
+        assert!(
+            env_get_message.contains("failed to read environment variable"),
+            "{}",
+            env_get_message
+        );
+        assert!(env_get_message.contains(&key), "{}", env_get_message);
+        assert!(
+            try_get_message.contains("failed to read environment variable"),
+            "{}",
+            try_get_message
+        );
+        assert!(try_get_message.contains(&key), "{}", try_get_message);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn env_list_reports_non_utf8_values_without_panicking() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let _guard = env_test_lock();
+        let key = format!("NOX_NON_UTF8_LIST_ENV_{}_{}", std::process::id(), line!());
+        let previous = env::var_os(&key);
+        unsafe {
+            env::set_var(&key, OsString::from_vec(vec![0xfe]));
+        }
+
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            environment: true,
+            ..RuntimePermissions::none()
+        });
+        let message = runtime.eval("env_list();").unwrap_err().message;
+
+        match previous {
+            Some(value) => unsafe { env::set_var(&key, value) },
+            None => unsafe { env::remove_var(&key) },
+        }
+
+        assert!(message.contains("failed to read environment variable"));
+        assert!(message.contains(&key));
     }
 
     #[test]
@@ -1646,6 +1730,7 @@ describe_read("{}");
     fn timer_stdlib_requires_capability() {
         let mut runtime = Runtime::new();
         let err = runtime.eval("sleep_ms(0);").unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("timer capability"));
     }
 
@@ -1663,6 +1748,7 @@ describe_read("{}");
     fn network_stdlib_requires_capability() {
         let mut runtime = Runtime::new();
         let err = runtime.eval(r#"tcp_connect("127.0.0.1", 1);"#).unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("network capability"));
     }
 
@@ -1679,9 +1765,49 @@ describe_read("{}");
     }
 
     #[test]
+    fn network_stdlib_reports_loopback_connectivity_when_allowed() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let accept = thread::spawn(move || listener.accept().map(|_| ()).unwrap());
+
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            network: true,
+            ..RuntimePermissions::none()
+        });
+        let value = runtime
+            .eval(&format!(r#"tcp_connect("127.0.0.1", {port});"#))
+            .unwrap();
+
+        assert_eq!(value, Value::Bool(true));
+        accept.join().unwrap();
+    }
+
+    #[test]
+    fn network_stdlib_returns_false_for_refused_loopback_when_allowed() {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            network: true,
+            ..RuntimePermissions::none()
+        });
+        let value = runtime
+            .eval(&format!(r#"tcp_connect("127.0.0.1", {port});"#))
+            .unwrap();
+
+        assert_eq!(value, Value::Bool(false));
+    }
+
+    #[test]
     fn async_task_stdlib_requires_capability() {
         let mut runtime = Runtime::new();
         let err = runtime.eval("task_sleep_ms(0);").unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("async task capability"));
     }
 
@@ -1848,6 +1974,31 @@ describe_read("{}");
     }
 
     #[test]
+    fn async_task_budget_exhaustion_cleans_tasks_created_by_that_eval() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+        runtime.set_instruction_budget(Some(20));
+
+        let err = runtime
+            .eval(
+                r#"
+                let task: int = task_sleep_ms(60000);
+                let value: int = 0;
+                while (value < 100) {
+                    value = value + 1;
+                }
+                task_ready(task);
+                "#,
+            )
+            .unwrap_err();
+
+        assert!(err.message.contains("instruction budget exhausted"));
+        assert_eq!(runtime.pending_async_task_count(), 0);
+    }
+
+    #[test]
     fn runtime_checks_and_inspects_files() {
         let mut runtime = Runtime::with_permissions(RuntimePermissions::cli());
         let example = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1863,6 +2014,7 @@ describe_read("{}");
     fn file_evaluation_requires_filesystem_capability() {
         let mut runtime = Runtime::new();
         let err = runtime.eval_file("examples/hello.nox").unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("filesystem capability"));
     }
 
@@ -1870,6 +2022,7 @@ describe_read("{}");
     fn read_text_requires_filesystem_capability() {
         let mut runtime = Runtime::new();
         let err = runtime.eval(r#"read_text("none.txt");"#).unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("filesystem capability"));
     }
 
@@ -1880,6 +2033,7 @@ describe_read("{}");
         let err = runtime
             .eval(r#"import "std/fs.nox" as fs; fs.try_read_text("none.txt");"#)
             .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(
             err.message.contains("filesystem capability"),
             "{}",
@@ -1946,6 +2100,7 @@ describe_read("{}");
         let err = runtime
             .eval(&format!(r#"read_text("{}");"#, escaped.display()))
             .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("filesystem read permission denied"));
     }
 
@@ -1972,6 +2127,7 @@ describe_read("{}");
                 escaped.display()
             ))
             .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(
             err.message.contains("filesystem read permission denied"),
             "{}",
@@ -2002,6 +2158,7 @@ describe_read("{}");
         let err = runtime
             .eval(&format!(r#"exists("{}");"#, missing_outside.display()))
             .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("filesystem read permission denied"));
     }
 
@@ -2026,6 +2183,7 @@ describe_read("{}");
         let err = runtime
             .eval(&format!(r#"write_text("{}", "hi");"#, target.display()))
             .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("filesystem write capability"));
         assert!(!target.exists());
     }
@@ -2079,7 +2237,41 @@ describe_read("{}");
                 escaped.display()
             ))
             .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("filesystem write permission denied"));
         assert!(!dir.join("outside.txt").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn filesystem_write_allowlist_denies_missing_file_under_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let dir = std::env::temp_dir().join(format!(
+            "nox-rt-write-symlink-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let allowed = dir.join("allowed");
+        let outside = dir.join("outside");
+        fs::create_dir_all(&allowed).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        let link = allowed.join("link-out");
+        symlink(&outside, &link).unwrap();
+        let target = link.join("created.txt");
+
+        let mut runtime = Runtime::with_permissions(
+            RuntimePermissions::none().allow_filesystem_write_under(&allowed),
+        );
+        let err = runtime
+            .eval(&format!(
+                r#"write_text("{}", "outside");"#,
+                target.display()
+            ))
+            .unwrap_err();
+
+        assert_eq!(err.code, "permission.denied");
+        assert!(err.message.contains("filesystem write permission denied"));
+        assert!(!outside.join("created.txt").exists());
     }
 }

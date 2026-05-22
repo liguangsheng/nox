@@ -20,8 +20,11 @@ case    mode    command status  real_seconds    output
 loop    e2e     ...     ok      0.040000        loop-ok
 ```
 
-`status` 必须全是 `ok`。`real_seconds` 用于同一台机器上前后对比，不作为 CI 硬门禁。
-`output` 保留脚本输出，便于确认 benchmark 仍在跑预期路径。
+`status` 必须全是 `ok`。脚本会断言每个 case 的预期输出片段，例如 `fib-ok`、
+`loop-ok` 和 test summary；如果系统有 `timeout` 命令，默认还会给每个 case 加 10 秒
+smoke 阈值，防止明显卡死。可以用 `NOX_BENCH_SMOKE_MAX_SECONDS=30` 调大阈值，或用
+`NOX_BENCH_SMOKE_TIMEOUT=/path/to/timeout` 指定 timeout 程序。`real_seconds` 用于同一台机器上
+前后对比，不作为 CI 硬门禁。`output` 保留脚本输出，便于确认 benchmark 仍在跑预期路径。
 
 `mode` 不是 VM 内部 profiler，而是稳定 CLI 入口的阶段代理：
 
@@ -69,7 +72,8 @@ debug 版的数字不能拿来当基线，只是 smoke。
 
 脚本对四个 `.nox` benchmark 都跑 `check`、`compile` 和 `e2e`；对
 `nox test examples/example_test.nox` 只跑 `e2e`。这些 case 覆盖递归、循环、
-容器构造、模块加载和 test runner。
+容器构造、模块加载和 test runner。`compile` mode 会断言 compact bytecode 输出包含
+`0000`，避免 inspect 路径静默输出空内容。
 
 ## 当前基线（参考）
 

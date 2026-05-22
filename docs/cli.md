@@ -132,6 +132,10 @@ cargo run -p nox -- check --json examples/type-error.nox
 {"schema":"nox.check.v1","ok":false,"diagnostics":[{"file":"examples/type-error.nox","code":"type.mismatch","message":"expected int, got str","span":{"start":18,"end":29},"source":{"name":"examples/type-error.nox","line":1,"column":19}}],"files":[{"path":"examples/type-error.nox","ok":false,"diagnostic_count":1}],"summary":{"checked":1,"passed":0,"failed":1,"diagnostic_count":1}}
 ```
 
+项目发现错误返回 `2`，但 `--json` 仍输出同一 schema，并使用 `project.discovery` 诊断 code。
+例如当前目录没有 `nox.toml`，或 manifest 展开的 `source_dirs` / `test_dirs` 不存在时，
+`diagnostics[0].file` 和 `files[0].path` 使用 `<project>`，便于工具把错误归到项目配置层。
+
 `diagnostics[]` 元素字段：
 
 - `file`：产生该诊断的入口文件。
@@ -312,6 +316,8 @@ cargo run -p nox -- lsp
 diagnostics 复用 `check` 的 parser、import resolver、type checker 和 verifier。
 `file://` 文档的相对 import 从打开文件所在目录解析，并会向父目录发现 `nox.toml`；
 发现 manifest 后，LSP 与 CLI 一样使用 `modules.source_dirs` 作为 import 搜索根。
+manifest 解析失败时，LSP 会先发布 `manifest.invalid` 诊断，不会继续把同一问题伪装成
+module resolution 失败。
 LSP 会把所有已打开的 `file://` 文档作为 import overlay 注入 module loader：当
 import specifier 命中一个已经在编辑器打开的文件时，使用编辑器中的内容而不是读磁盘，
 编辑期间无需先保存。

@@ -424,6 +424,11 @@ runtime.division-by-zero
 module.name-conflict
 module.not-found
 module.member-not-found
+manifest.invalid
+project.discovery
+permission.denied
+host.callback
+bytecode.verifier
 test.signature
 ```
 
