@@ -128,7 +128,7 @@ payload 绑定写在 `if` 条件里。
 
 ### 5. Formatter、LSP 和 CLI
 
-- 已让 `examples/formatter-golden.nox` 包含 `option[...]`、`result[..., ...]` 和
+- 已让 `tests/fixtures/formatter-golden.nox` 包含 `option[...]`、`result[..., ...]` 和
   `match` payload binding。
 - 已由 `fmt_golden_fixture_is_idempotent` 证明新语法 idempotent。
 - LSP hover 对 `option[T]` / `result[T, E]` 使用 `Type::Display` 的稳定文本。
@@ -207,6 +207,6 @@ match (value) {
 
 ## 完成定义
 
-28.1 只在本计划被提交、ADR 0014 链接本计划、`PLAN.md` 状态更新并通过固定验证后完成。
-后续实现阶段完成前，不得把 `docs/language-v0.md` 或 `docs/runtime.md` 改写成
+28.1 只在本实施计划被提交、ADR 0014 链接本计划，并通过固定验证后完成。
+后续实现阶段完成前，不得把 `language-v0.md` 或 `runtime.md` 改写成
 option/result 已可用。

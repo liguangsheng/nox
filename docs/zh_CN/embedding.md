@@ -429,7 +429,7 @@ key 或 field 返回 `NOX_CORE_ERROR`；传入 null 指针返回 `NOX_CORE_NULL_
 当前 C ABI 不支持从 C 端构造、修改 array/map/record/option/result，也不允许 C callback
 把复合值作为参数或返回值注册到脚本类型签名里。
 
-完整 C smoke 见 [../examples/embed/c_embedding.c](../examples/embed/c_embedding.c)。
+完整 C smoke 见 [../../examples/embed/c_embedding.c](../../examples/embed/c_embedding.c)。
 可复制的宿主回归入口：
 
 ```sh

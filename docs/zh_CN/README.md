@@ -28,6 +28,6 @@
 - [v0.0.2 设计草案集](v0.0.2-design-drafts.md)：match、可选值、命名空间、nox test、args()、Engine session、C ABI 复合值。
 - [决策记录](decisions/README.md)：对外可见的语言、模块、ABI、工具链决策。
 
-[CHANGELOG.md](../CHANGELOG.md) 记录对外可见变更。
-[README.md](../README.md) 是项目快速入口，[examples/README.md](../examples/README.md)
+[CHANGELOG.md](../../CHANGELOG.md) 记录对外可见变更。
+[README.md](../../README.md) 是英文项目快速入口，[README_zh_CN.md](../../README_zh_CN.md) 是中文快速入口，[examples/README.md](../../examples/README.md)
 列出可运行示例和负向 fixture。

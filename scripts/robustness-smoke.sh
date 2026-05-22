@@ -75,12 +75,12 @@ run_expect_status_stdin() {
 }
 
 for file in \
-    "$ROOT/examples/malformed/unterminated-string.nox" \
-    "$ROOT/examples/malformed/deep-nesting.nox" \
-    "$ROOT/examples/malformed/illegal-token.nox" \
-    "$ROOT/examples/malformed/half-import.nox" \
-    "$ROOT/examples/malformed/bad-record.nox" \
-    "$ROOT/examples/malformed/lsp-half-source.nox"
+    "$ROOT/tests/malformed/unterminated-string.nox" \
+    "$ROOT/tests/malformed/deep-nesting.nox" \
+    "$ROOT/tests/malformed/illegal-token.nox" \
+    "$ROOT/tests/malformed/half-import.nox" \
+    "$ROOT/tests/malformed/bad-record.nox" \
+    "$ROOT/tests/malformed/lsp-half-source.nox"
 do
     file_name=$(basename "$file")
     run_expect_status "check:$file_name" 1 "$NOX_BIN" check "$file"
@@ -88,9 +88,9 @@ do
 done
 
 for file in \
-    "$ROOT/examples/malformed/type-mismatch.nox" \
-    "$ROOT/examples/malformed/namespace-missing-member.nox" \
-    "$ROOT/examples/malformed/deep-record-map.nox"
+    "$ROOT/tests/malformed/type-mismatch.nox" \
+    "$ROOT/tests/malformed/namespace-missing-member.nox" \
+    "$ROOT/tests/malformed/deep-record-map.nox"
 do
     file_name=$(basename "$file")
     run_expect_status "check:$file_name" 1 "$NOX_BIN" check "$file"
@@ -98,8 +98,8 @@ do
 done
 
 for dir in \
-    "$ROOT/examples/malformed/manifest-missing-version" \
-    "$ROOT/examples/malformed/manifest-unknown-permission"
+    "$ROOT/tests/malformed/manifest-missing-version" \
+    "$ROOT/tests/malformed/manifest-unknown-permission"
 do
     dir_name=$(basename "$dir")
     run_expect_status_in_dir "check:$dir_name" 2 "$dir" "$NOX_BIN" check
@@ -108,7 +108,7 @@ done
 
 lsp_input=$(mktemp)
 trap 'rm -f "$lsp_input"' EXIT
-python3 - "$ROOT/examples/malformed/lsp-half-source.nox" >"$lsp_input" <<'PY'
+python3 - "$ROOT/tests/malformed/lsp-half-source.nox" >"$lsp_input" <<'PY'
 import json
 import pathlib
 import sys

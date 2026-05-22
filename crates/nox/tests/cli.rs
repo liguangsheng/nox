@@ -51,10 +51,10 @@ fn lsp_position(source: &str, byte_offset: usize) -> (usize, usize) {
 fn run_prints_final_value() {
     for (path, expected) in [
         ("examples/arrays.nox", "40\n"),
-        ("examples/bench-containers.nox", "containers-ok\n"),
-        ("examples/bench-fib.nox", "fib-ok\n"),
-        ("examples/bench-loop.nox", "loop-ok\n"),
-        ("examples/bench-modules.nox", "modules-ok\n"),
+        ("tests/benchmarks/bench-containers.nox", "containers-ok\n"),
+        ("tests/benchmarks/bench-fib.nox", "fib-ok\n"),
+        ("tests/benchmarks/bench-loop.nox", "loop-ok\n"),
+        ("tests/benchmarks/bench-modules.nox", "modules-ok\n"),
         ("examples/hello.nox", "84\n"),
         ("examples/control-flow.nox", "sum-ok\n"),
         ("examples/constants.nox", "const-ok\n"),
@@ -71,7 +71,10 @@ fn run_prints_final_value() {
         ("examples/records.nox", "42\n"),
         ("examples/scopes.nox", "10\n"),
         ("examples/string-escapes.nox", "escape-ok\n"),
-        ("examples/string-and-map-builtins.nox", "builtins-ok\n"),
+        (
+            "tests/fixtures/string-and-map-builtins.nox",
+            "builtins-ok\n",
+        ),
         ("examples/strings.nox", "nox:typed\n"),
         ("examples/stdlib.nox", "sqrt-ok\n"),
     ] {
@@ -139,7 +142,7 @@ fn check_reports_ok_without_running() {
         "examples/records.nox",
         "examples/scopes.nox",
         "examples/string-escapes.nox",
-        "examples/string-and-map-builtins.nox",
+        "tests/fixtures/string-and-map-builtins.nox",
         "examples/strings.nox",
         "examples/stdlib.nox",
     ] {
@@ -195,8 +198,8 @@ fn check_json_reports_success_without_human_ok_lines() {
 
 #[test]
 fn check_json_reports_all_failures_on_stdout() {
-    let first = fixture("examples/type-error.nox");
-    let second = fixture("examples/type-error-record-field-access.nox");
+    let first = fixture("tests/fixtures/type-error.nox");
+    let second = fixture("tests/fixtures/type-error-record-field-access.nox");
     let output = nox_command()
         .args([
             "check",
@@ -416,8 +419,8 @@ fn check_json_and_lsp_report_parser_code() {
 
 #[test]
 fn check_multiple_files_reports_all_failures() {
-    let first = fixture("examples/type-error.nox");
-    let second = fixture("examples/type-error-record-field-access.nox");
+    let first = fixture("tests/fixtures/type-error.nox");
+    let second = fixture("tests/fixtures/type-error-record-field-access.nox");
     let output = nox_command()
         .args(["check", first.to_str().unwrap(), second.to_str().unwrap()])
         .output()
@@ -1774,7 +1777,7 @@ fn fmt_prints_match_statement() {
 
 #[test]
 fn fmt_golden_fixture_is_idempotent() {
-    let path = fixture("examples/formatter-golden.nox");
+    let path = fixture("tests/fixtures/formatter-golden.nox");
     let first = nox_command()
         .args(["fmt", path.to_str().unwrap()])
         .output()
@@ -2832,69 +2835,81 @@ fn lsp_hover_returns_expression_type() {
 #[test]
 fn check_exits_nonzero_for_static_type_error() {
     for (path, expected) in [
-        ("examples/type-error.nox", "expected int, got str"),
+        ("tests/fixtures/type-error.nox", "expected int, got str"),
         (
-            "examples/type-error-array-element.nox",
+            "tests/fixtures/type-error-array-element.nox",
             "expected int, got str",
         ),
         (
-            "examples/type-error-array-index.nox",
+            "tests/fixtures/type-error-array-index.nox",
             "expected int, got float",
         ),
         (
-            "examples/type-error-array-len.nox",
+            "tests/fixtures/type-error-array-len.nox",
             "expected array or str, got int",
         ),
         (
-            "examples/type-error-int-float.nox",
+            "tests/fixtures/type-error-int-float.nox",
             "'+' is not defined for int and float",
         ),
         (
-            "examples/type-error-for-range.nox",
+            "tests/fixtures/type-error-for-range.nox",
             "expected int, got float",
         ),
         (
-            "examples/type-error-const-assignment.nox",
+            "tests/fixtures/type-error-const-assignment.nox",
             "cannot assign to constant 'value'",
         ),
         (
-            "examples/type-error-break-outside-loop.nox",
+            "tests/fixtures/type-error-break-outside-loop.nox",
             "'break' is only allowed inside a 'while' or 'for' loop",
         ),
         (
-            "examples/type-error-continue-outside-loop.nox",
+            "tests/fixtures/type-error-continue-outside-loop.nox",
             "'continue' is only allowed inside a 'while' or 'for' loop",
         ),
-        ("examples/type-error-logical.nox", "expected bool, got int"),
-        ("examples/type-error-map-index.nox", "expected str, got int"),
-        ("examples/type-error-map-key.nox", "expected str, got int"),
-        ("examples/type-error-map-value.nox", "expected int, got str"),
         (
-            "examples/type-error-record-duplicate-field.nox",
-            "duplicate field 'name'",
+            "tests/fixtures/type-error-logical.nox",
+            "expected bool, got int",
         ),
         (
-            "examples/type-error-record-extra-field.nox",
-            "record 'User' has no field 'score'",
+            "tests/fixtures/type-error-map-index.nox",
+            "expected str, got int",
         ),
         (
-            "examples/type-error-record-field-access.nox",
-            "record 'User' has no field 'score'",
+            "tests/fixtures/type-error-map-key.nox",
+            "expected str, got int",
         ),
         (
-            "examples/type-error-record-field-type.nox",
+            "tests/fixtures/type-error-map-value.nox",
             "expected int, got str",
         ),
         (
-            "examples/type-error-record-missing-field.nox",
+            "tests/fixtures/type-error-record-duplicate-field.nox",
+            "duplicate field 'name'",
+        ),
+        (
+            "tests/fixtures/type-error-record-extra-field.nox",
+            "record 'User' has no field 'score'",
+        ),
+        (
+            "tests/fixtures/type-error-record-field-access.nox",
+            "record 'User' has no field 'score'",
+        ),
+        (
+            "tests/fixtures/type-error-record-field-type.nox",
+            "expected int, got str",
+        ),
+        (
+            "tests/fixtures/type-error-record-missing-field.nox",
             "missing field 'score'",
         ),
         (
-            "examples/type-error-sqrt-int.nox",
+            "tests/fixtures/type-error-sqrt-int.nox",
             "expected float, got int",
         ),
         (
-            "examples/type-error-sleep-float.nox",
+            "tests/fixtures/type-error-sleep-float.nox",
             "expected int, got float",
         ),
     ] {
@@ -2915,12 +2930,18 @@ fn check_exits_nonzero_for_static_type_error() {
 #[test]
 fn run_exits_nonzero_for_runtime_error() {
     for (path, expected) in [
-        ("examples/runtime-error-divide-zero.nox", "division by zero"),
         (
-            "examples/runtime-error-array-bounds.nox",
+            "tests/fixtures/runtime-error-divide-zero.nox",
+            "division by zero",
+        ),
+        (
+            "tests/fixtures/runtime-error-array-bounds.nox",
             "array index out of bounds",
         ),
-        ("examples/runtime-error-map-key.nox", "map key not found"),
+        (
+            "tests/fixtures/runtime-error-map-key.nox",
+            "map key not found",
+        ),
     ] {
         let output = nox_command()
             .args(["run", fixture(path).to_str().unwrap()])
@@ -2938,7 +2959,7 @@ fn run_exits_nonzero_for_runtime_error() {
 
 #[test]
 fn check_exits_nonzero_for_syntax_error() {
-    let path = "examples/syntax-error-string-escape.nox";
+    let path = "tests/fixtures/syntax-error-string-escape.nox";
     let output = nox_command()
         .args(["check", fixture(path).to_str().unwrap()])
         .output()
@@ -2957,7 +2978,9 @@ fn check_prints_multiple_syntax_errors() {
     let output = nox_command()
         .args([
             "check",
-            fixture("examples/syntax-errors.nox").to_str().unwrap(),
+            fixture("tests/fixtures/syntax-errors.nox")
+                .to_str()
+                .unwrap(),
         ])
         .output()
         .unwrap();

@@ -7,7 +7,7 @@
 ## 背景
 
 Nox 已有 `run`、`check`、`fmt`、`lsp` 和 `inspect-bytecode`，但缺少项目内测试命令。
-PLAN.md 要求 `nox test` 有明确测试语义、退出码和输出格式。因为 `check --json` 已经有
+v0.0.2 工具链目标要求 `nox test` 有明确测试语义、退出码和输出格式。因为 `check --json` 已经有
 schema 版本，测试输出也需要同样的版本边界，避免工具消费者依赖临时文本。
 
 ## 决策

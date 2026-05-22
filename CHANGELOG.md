@@ -6,6 +6,34 @@
 
 ## [未发布]
 
+## [0.0.3] — 2026-05-22
+
+本版本紧接 `v0.0.2` 基线，把 v0.0.2 之后累积的文档基础设施改动（中英文档拆分、英文 README、test
+fixture 与示例分离）收口，并在 release-gate / release-audit 中接入 PLAN 完成定义第 9-13 项的
+release-time 护栏与 GOAL 实现判定，让 `scripts/release-audit.sh` 能在无人推理的情况下输出
+"GOAL implementation: ACHIEVED" / "NOT ACHIEVED"。
+
+### 文档基础设施
+
+- 文档：中英文档分别迁入 `docs/zh_CN/` 与 `docs/en/` 目录；新增完整英文文档树（README、language-v0、cli、runtime、embedding、diagnostics、benchmarks、release-checklist、architecture、development、directory-structure）和英文 README。
+- 测试：将示例 `.nox` 脚本目录中的回归 fixture 与 benchmark 文件迁出到 `tests/fixtures/`、`tests/malformed/`、`tests/benchmarks/`；`examples/` 只保留对外展示的示例脚本与示例项目。release-gate、release-checklist 和相关脚本同步更新路径引用。
+
+### 工具和验证
+
+- 工具：release-gate 新增 product-shape guardrail（PLAN 完成定义第 9 项）：对 `nox --help` 输出 grep 七个稳定 CLI 子命令（`run`、`check`、`test`、`fmt`、`project check`、`lsp`、`inspect-bytecode`），任一缺失立即失败。
+- 工具：release-gate 新增 small-footprint guardrail（PLAN 完成定义第 10 项）：release CLI 二进制大小 ≤ 4 MiB、`libnox_core` 动态库 ≤ 2.5 MiB、第三方运行时依赖数 = 0、LOC 趋势记录。当前基线分别为 1,673,912 / 1,030,240 bytes、0 第三方依赖、19,489 行 Rust 源码。阈值上调需独立 commit + CHANGELOG + ADR，不允许在 release-prep 阶段临时上调。
+- 工具：`scripts/bench-smoke.sh` 新增 per-case e2e budget（PLAN 完成定义第 11 项）：bench-fib ≤ 2.0s、bench-loop ≤ 3.0s、bench-containers ≤ 1.0s、bench-modules ≤ 1.0s、nox-test ≤ 2.0s。budget 在 release-gate `benchmark smoke` 段强制执行，超 budget 立即 fail。当前 release 实测分别为 ~0.04 / 0.05 / 0.016 / 0.008 / 0.002 秒，budget 留 6-1000x 缓冲应对 CI 共享核与机器负载波动。budget 上调需独立 commit + CHANGELOG + ADR。
+- 工具：release-gate 在 `embedding regression` 段加 wall-time budget（PLAN 完成定义第 12 项前半）：默认 `NOX_EMBEDDING_TIME_BUDGET=180` 秒，覆盖 Rust API/runtime test、Rust embedding 示例、`nox_core` 动态库 build、C ABI header↔library symbol parity 与 C 嵌入 smoke 编译/链接/运行；当前 warm cache 下 ~1 秒。
+- 工具：release-gate 新增 stdlib surface guardrail（PLAN 完成定义第 12 项后半）：`tests/fixtures/stdlib-surface.nox` 集中类型检查 fs/env/time/net/async/math/string 七类公开入口，任一签名缺失或被删除立即失败。
+
+### 示例项目
+
+- 新增 `examples/projects/health-check` 示例项目（PLAN 完成定义第 12 项后半"真实生产场景"）：用 `std/fs.nox`、`std/env.nox` 与 `option[str]` 检查文件与环境变量是否齐全，把 capability-bound 调用与纯决策函数分层以便不授予 capability 即可跑单元测试；release-gate 通过 `project check`（含 check/test/fmt --check）与 `project check --json` 双路 smoke。
+
+### 持续维护门槛
+
+- 工具：`scripts/release-audit.sh` 新增 PLAN 完成定义第 9-13 项的综合断言（PLAN 完成定义"持续维护门槛"），检查 product-shape / small-footprint / bench budget / embedding budget / stdlib surface guardrail / 非 scoreboard 示例项目 / 暂缓项关键词共 7 项是否在 release-gate 与仓库中仍然在位；任一缺失立即作为 blocker 计入。脚本同时输出 `GOAL implementation: ACHIEVED` / `NOT ACHIEVED` 判定，让 release operator 不需要再做二次推理。
+
 ## [0.0.2] — 2026-05-22
 
 本版本紧接 `v0.0.1` 基线，汇总当前 `main` 上已经完成且对外可见的能力与发布硬化。

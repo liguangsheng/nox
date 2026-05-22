@@ -1,0 +1,38 @@
+import "std/fs.nox" as fs;
+
+import "std/env.nox" as env;
+
+export fn file_present(path: str) -> bool {
+    return fs.exists(path);
+}
+
+export fn pick_env_value(value: option[str], fallback: str) -> str {
+    match (value) {
+        some(text) => {
+            if (len(text) > 0) {
+                return text;
+            }
+            return fallback;
+        }
+        none => {
+            return fallback;
+        }
+    }
+}
+
+export fn env_or_default(name: str, fallback: str) -> str {
+    let value: option[str] = env.try_get(name);
+    return pick_env_value(value, fallback);
+}
+
+export fn count_present(flags: [bool]) -> int {
+    let total: int = 0;
+    let i: int = 0;
+    while (i < len(flags)) {
+        if (flags[i]) {
+            total = total + 1;
+        }
+        i = i + 1;
+    }
+    return total;
+}

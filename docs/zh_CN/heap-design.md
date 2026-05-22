@@ -1,7 +1,7 @@
 # 堆与对象生命周期设计
 
-本文记录 Nox v0.0.2 的堆模型选择、当前实现状态以及后续要解决的问题。这是 PLAN.md
-阶段 12.1 的设计文档：先写清楚约束，再决定要不要替换实现。
+本文记录 Nox v0.0.2 的堆模型选择、当前实现状态以及后续要解决的问题。这是早期
+堆模型阶段的设计文档：先写清楚约束，再决定要不要替换实现。
 
 ## v0.0.3 复审结论
 
@@ -136,7 +136,7 @@
    评估是否引入 `Engine::drop_value(value)` 类 API、或要求宿主主动调用
    `collect_garbage()`，给出基线数字（见 [benchmarks.md](benchmarks.md)）。
 3. C ABI 要暴露 array / map / record 内部数据：决定是按 handle 模型还是
-   按 borrow 模型设计（见 PLAN.md 阶段 13.2）。
+   按 borrow 模型设计；当前只读 handle 方案见 [0005 - C ABI 复合值只读 handle](decisions/0005-c-abi-compound-handles.md)。
 4. 未来重新启动可变容器、函数值逃逸或跨 ABI 函数调用时，先回到本文更新生命周期和
    root 管理方案，再改 `Value` 表示。
 

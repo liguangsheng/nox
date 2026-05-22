@@ -73,8 +73,8 @@ jobs:
           python3 - <<'PY'
           import pathlib, re, sys
           roots = [pathlib.Path(p) for p in [
-              "README.md", "README_zh_CN.md", "docs",
-              "examples/README.md",
+              "README.md", "README_zh_CN.md", "docs/en", "docs/zh_CN",
+              "examples/README.md", "tests/README.md",
           ]]
           files = []
           for root in roots:

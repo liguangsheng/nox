@@ -7,7 +7,7 @@
 ## 背景
 
 早期 C ABI 可以返回 `null`、`bool`、`int`、`float` 和 owned string。脚本返回
-array、map 或 record 时，C 宿主只能看到 value kind，无法读取内容。PLAN.md 要求
+array、map 或 record 时，C 宿主只能看到 value kind，无法读取内容。v0.0.2 ABI 目标要求
 v0.0.2 让 C 宿主能读取这些复合值，同时保持所有权规则清楚。
 
 ## 决策

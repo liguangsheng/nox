@@ -1,89 +1,119 @@
 # Nox
 
-Nox 是一个用 Rust 编写的可嵌入静态类型脚本引擎和默认运行时。脚本文件使用
-`.nox` 扩展名。
+Nox is an embeddable, statically typed scripting engine and default runtime written in Rust. Nox source files use the `.nox` extension.
 
-当前 workspace 有两个 crate：
+[中文 README](README_zh_CN.md)
 
-- `nox_core`：可嵌入引擎，负责语言前端、静态类型检查、字节码、VM、值模型、
-  诊断、宿主函数和 C ABI。
-- `nox`：默认运行时和 CLI，构建在 `nox_core` 之上，负责文件加载、权限控制、
-  标准库、LSP 和命令行入口。
+The workspace contains two crates:
 
-`nox_core` 暴露 Rust API 和 C ABI。C 头文件位于
-`crates/nox_core/include/nox_core.h`。
+- `nox_core`: the embeddable engine. It owns the language frontend, static type checker, bytecode, VM, value model, diagnostics, host functions, Rust API, and C ABI.
+- `nox`: the default runtime and CLI built on top of `nox_core`. It owns file loading, permission checks, the standard library surface, LSP support, and command-line behavior.
 
-## 当前状态
+`nox_core` exposes both a Rust API and a C ABI. The C header is at `crates/nox_core/include/nox_core.h`.
 
-Nox 目前处于 `0.0.x` 本地开发 checkpoint 阶段，还不是生产级正式发布。版本号、
-CHANGELOG、release checklist 和本地 smoke 正在按正式发布要求收口；在 tag、远端 CI、
-分发 smoke、回滚路径和兼容矩阵全部通过前，不应把当前 checkout 描述成 production release。
+## Status
 
-生产边界按工程发布口径理解：没有已知高危缺陷、没有未说明的兼容破坏、默认权限保守、
-发布步骤可审计且可回滚。它不表示数学意义上的绝对零风险。
+The latest production release is `v0.0.2`. For that version, the Cargo version, git tag, CHANGELOG, release checklist, GitHub Release, remote CI, local release gate, and distribution smoke tests are aligned.
 
-第一版语言切片已经实现：带 span 的词法 token、递归下降 parser、静态类型检查、
-flat bytecode 编译、VM、带类型变量、带类型函数、调用、块、`if`、`while`、
-半开 `for` range、`return`、数组、`map[str, T]`、命名 `record`、相对 import
-和 `export` 可见性。
+Future `0.0.x` versions may still evolve the language, runtime, and embedding APIs. Breaking changes must be called out in the CHANGELOG, relevant documentation, and release notes.
 
-默认运行时会相对于入口文件解析 `import "..."`，并安装一个小型带类型标准库。
-推荐通过静态模块导入使用文件、环境和时间能力，例如
-`import "std/fs.nox" as fs;`；旧全局函数仍作为兼容表面保留。
-运行时权限是显式的：CLI 只默认授予入口文件和 import 所需的文件系统读能力；
-环境变量、定时器、网络和异步任务辅助函数都由单独权限控制。
+Production readiness is defined in engineering release terms: no known high-severity defects, no undocumented compatibility breakage, conservative default permissions, and auditable, rollback-capable release steps. It is not a mathematical zero-risk claim.
 
-## 快速开始
+The first language slice is implemented: spanned tokens, recursive-descent parsing, static type checking, flat bytecode compilation, a VM, typed variables, typed functions, calls, blocks, `if`, `while`, half-open `for` ranges, `return`, arrays, `map[str, T]`, named `record` values, relative imports, and `export` visibility.
 
-本地构建 CLI：
+The default runtime resolves `import "..."` relative to the entry file and installs a small typed standard library. Prefer static module imports for file, environment, and time capabilities, for example `import "std/fs.nox" as fs;`. Older global functions remain available as compatibility surface. Runtime permissions are explicit: the CLI only grants the filesystem read access needed for the entry file and imports by default. Environment variables, timers, networking, and async task helpers require separate permissions.
+
+## Quick Start
+
+### Use Release Packages
+
+GitHub Releases split the command-line tool and embedding SDK starting with `v0.0.2`:
+
+- `nox-cli-v0.0.2-x86_64-unknown-linux-gnu.tar.gz`: for CLI users. It contains `bin/nox`, README files, the CHANGELOG, and script examples.
+- `nox-embed-v0.0.2-x86_64-unknown-linux-gnu.tar.gz`: for host applications. It contains `lib/libnox_core.so`, `include/nox_core.h`, README files, the CHANGELOG, and a C embedding example.
+
+Download, verify, and install the CLI to `/usr/local/bin/nox`:
+
+```sh
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.2/nox-cli-v0.0.2-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.2/nox-cli-v0.0.2-x86_64-unknown-linux-gnu.sha256
+sha256sum -c nox-cli-v0.0.2-x86_64-unknown-linux-gnu.sha256
+tar -xzf nox-cli-v0.0.2-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 nox-cli-v0.0.2-x86_64-unknown-linux-gnu/bin/nox /usr/local/bin/nox
+nox --version
+nox run ./nox-cli-v0.0.2-x86_64-unknown-linux-gnu/examples/hello.nox
+```
+
+Download and verify the embedding SDK:
+
+```sh
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.2/nox-embed-v0.0.2-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.2/nox-embed-v0.0.2-x86_64-unknown-linux-gnu.sha256
+sha256sum -c nox-embed-v0.0.2-x86_64-unknown-linux-gnu.sha256
+tar -xzf nox-embed-v0.0.2-x86_64-unknown-linux-gnu.tar.gz
+cc -Inox-embed-v0.0.2-x86_64-unknown-linux-gnu/include \
+  nox-embed-v0.0.2-x86_64-unknown-linux-gnu/examples/embed/c_embedding.c \
+  -Lnox-embed-v0.0.2-x86_64-unknown-linux-gnu/lib -lnox_core \
+  -Wl,-rpath,"$PWD/nox-embed-v0.0.2-x86_64-unknown-linux-gnu/lib" \
+  -o /tmp/nox-c-embedding-smoke
+/tmp/nox-c-embedding-smoke
+```
+
+Current release assets only commit to `x86_64-unknown-linux-gnu`. Build from source for other platforms.
+
+### Build From Source
+
+Build the CLI locally:
 
 ```sh
 cargo build -p nox
 target/debug/nox --version
 ```
 
-运行主示例：
+Run the main examples:
 
 ```sh
 cargo run -p nox -- run examples/hello.nox
 cargo run -p nox -- check examples/hello.nox
-cargo run -p nox -- check --json examples/type-error.nox
-cargo run -p nox -- test examples/example_test.nox
+cargo run -p nox -- check --json tests/fixtures/type-error.nox
+cargo run -p nox -- test tests/fixtures/example_test.nox
 cargo run -p nox -- fmt examples/hello.nox
 cargo run -p nox -- inspect-bytecode --compact examples/hello.nox
 ```
 
-运行多模块示例项目：
+Run the multi-module sample project:
 
 ```sh
 cd examples/projects/scoreboard
 cargo run -p nox -- project check
 ```
 
-更多示例位于 `examples/`：
+More examples are available under `examples/`:
 
-- `arrays.nox`：同质数组、整数索引和 `len(array)`。
-- `maps.nox`：`map[str, T]`、字符串 key、map 索引和 `map_get`。
-- `control-flow.nox`：带类型函数、`while`、赋值和 `if`。
-- `export-main.nox`：显式 `export` 模块边界。
-- `example_test.nox`：`nox test` 的最小测试文件。
-- `for-range.nox`：半开 `int` 区间循环。
-- `match.nox`：受限 `match` 分支。
-- `numeric-boundaries.nox`：整数除法和显式数值转换边界。
-- `recursion.nox`：递归函数调用。
-- `records.nox`：命名 record、record 字面量和字段访问。
-- `stdlib.nox`：默认运行时宿主函数调用。
-- `projects/scoreboard/`：带 `nox.toml`、namespace import、source/test dirs 的多模块项目。
-- `type-error*.nox`、`syntax-errors.nox`、`runtime-error*.nox`：负向 fixture。
+- `arrays.nox`: homogeneous arrays, integer indexing, and `len(array)`.
+- `maps.nox`: `map[str, T]`, string keys, map indexing, and `map_get`.
+- `control-flow.nox`: typed functions, `while`, assignment, and `if`.
+- `export-main.nox`: explicit `export` module boundaries.
+- `example_test.nox`: a minimal `nox test` file.
+- `for-range.nox`: half-open `int` range loops.
+- `match.nox`: limited `match` branches.
+- `numeric-boundaries.nox`: integer division and explicit numeric conversion boundaries.
+- `recursion.nox`: recursive function calls.
+- `records.nox`: named records, record literals, and field access.
+- `stdlib.nox`: default runtime host function calls.
+- `projects/scoreboard/`: a multi-module project with `nox.toml`, namespace imports, and source/test directories.
+- `tests/fixtures/type-error*.nox`, `tests/fixtures/syntax-errors.nox`, and
+  `tests/fixtures/runtime-error*.nox`: negative fixtures used by automated checks.
 
-## 文档
+## Documentation
 
-- [docs/README.md](docs/README.md)：文档索引。
-- [docs/language-v0.md](docs/language-v0.md)：已实现语言切片。
-- [docs/cli.md](docs/cli.md)：命令行为和退出码。
-- [docs/runtime.md](docs/runtime.md)：运行时权限和标准库。
-- [docs/embedding.md](docs/embedding.md)：Rust 和 C 嵌入指南。
-- [docs/diagnostics.md](docs/diagnostics.md)：机器可读诊断 code。
-- [docs/benchmarks.md](docs/benchmarks.md)：benchmark smoke 跑法。
-- [docs/development.md](docs/development.md)：验证、测试和迭代说明。
-- [docs/directory-structure.md](docs/directory-structure.md)：目录结构和文件归属。
+- [docs/en/README.md](docs/en/README.md): English documentation index.
+- [docs/en/language-v0.md](docs/en/language-v0.md): implemented language slice.
+- [docs/en/cli.md](docs/en/cli.md): command behavior and exit codes.
+- [docs/en/runtime.md](docs/en/runtime.md): runtime permissions and standard library.
+- [docs/en/embedding.md](docs/en/embedding.md): Rust and C embedding guide.
+- [docs/en/diagnostics.md](docs/en/diagnostics.md): machine-readable diagnostic codes.
+- [docs/en/benchmarks.md](docs/en/benchmarks.md): benchmark smoke workflow.
+- [docs/en/development.md](docs/en/development.md): validation, testing, and iteration notes.
+- [docs/en/directory-structure.md](docs/en/directory-structure.md): directory structure and file ownership.
+- [docs/zh_CN/README.md](docs/zh_CN/README.md): Chinese documentation index.

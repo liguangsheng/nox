@@ -1,0 +1,15 @@
+import "checks.nox" as checks;
+
+let manifest_ok: bool = checks.file_present("nox.toml");
+
+let user_label: str = checks.env_or_default("USER", "unknown");
+
+let flags: [bool] = [manifest_ok, true];
+
+let healthy_count: int = checks.count_present(flags);
+
+if (healthy_count == 2) {
+    "health-check: ok";
+} else {
+    "health-check: degraded";
+}

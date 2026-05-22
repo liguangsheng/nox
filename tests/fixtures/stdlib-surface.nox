@@ -1,0 +1,26 @@
+// P8.5 standard-library surface guardrail.
+//
+// Type-checking this file (via `nox check`) is the release-time assertion for
+// PLAN 完成定义第 12 项后半 "标准库 fs/env/time/net/async/math/string 七类最小入口".
+// If any public stdlib surface is silently removed or its signature changes, the
+// check step fails. The file is intentionally not executed: several entries
+// require runtime capability grants, but `nox check` only resolves names and
+// types, not capabilities.
+
+import "std/fs.nox" as fs;
+import "std/env.nox" as env;
+import "std/time.nox" as time;
+
+fn audit() -> int {
+    let fs_probe: bool = fs.exists("placeholder.txt");
+    let env_probe: map[str, str] = env.list();
+    let time_probe: null = time.sleep_ms(0);
+    let net_probe: bool = tcp_connect("0.0.0.0", 1);
+    let async_sleep_probe: int = task_sleep_ms(0);
+    let async_ready_probe: bool = task_ready(0);
+    let async_cancel_probe: null = task_cancel(0);
+    let math_probe: float = sqrt(4.0);
+    let sample: str = "ok";
+    let string_probe: int = len(sample);
+    return string_probe;
+}

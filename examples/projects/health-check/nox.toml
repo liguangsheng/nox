@@ -1,0 +1,11 @@
+[package]
+name = "health-check"
+version = "0.0.1"
+description = "Sample Nox project: configuration & environment health check"
+
+[entrypoints]
+main = "src/main.nox"
+
+[modules]
+source_dirs = ["src"]
+test_dirs = ["tests"]
