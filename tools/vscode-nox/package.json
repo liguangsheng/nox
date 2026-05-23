@@ -1,0 +1,100 @@
+{
+  "name": "nox",
+  "displayName": "Nox",
+  "description": "Syntax highlighting and LSP support for Nox scripts.",
+  "version": "0.0.3",
+  "publisher": "nox-lang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/liguangsheng/nox.git"
+  },
+  "files": [
+    "LICENSE.txt",
+    "package.json",
+    "src/extension.js",
+    "syntaxes/nox.tmLanguage.json",
+    "language-configuration/nox.json",
+    "node_modules/vscode-languageclient/**",
+    "node_modules/vscode-jsonrpc/**",
+    "node_modules/vscode-languageserver-protocol/**",
+    "node_modules/vscode-languageserver-types/**",
+    "node_modules/semver/**",
+    "node_modules/balanced-match/**"
+  ],
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": ["Programming Languages"],
+  "activationEvents": ["onLanguage:nox", "onDebug:nox"],
+  "main": "./src/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "nox",
+        "aliases": ["Nox", "nox"],
+        "extensions": [".nox"],
+        "configuration": "./language-configuration/nox.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "nox",
+        "scopeName": "source.nox",
+        "path": "./syntaxes/nox.tmLanguage.json"
+      }
+    ],
+    "breakpoints": [
+      {
+        "language": "nox"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "nox",
+        "label": "Nox",
+        "languages": ["nox"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Nox script to debug.",
+                "default": "${workspaceFolder}/main.nox"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "nox",
+            "request": "launch",
+            "name": "Debug Nox script",
+            "program": "${file}"
+          }
+        ]
+      }
+    ],
+    "configuration": {
+      "title": "Nox",
+      "properties": {
+        "nox.binaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the nox binary. Defaults to NOX_BINARY, then nox on PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package",
+    "smoke": "node scripts/smoke.js"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^2.15.0"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  }
+}

@@ -1,0 +1,38 @@
+import "std/array.nox" as array;
+
+fn double(x: int) -> int {
+    return x * 2;
+}
+
+fn triple(x: int) -> int {
+    return x * 3;
+}
+
+fn apply(f: fn(int) -> int, v: int) -> int {
+    return f(v);
+}
+
+let f: fn(int) -> int = double;
+print(to_str_int(f(5)));
+
+print(to_str_int(apply(triple, 5)));
+
+let fs: [fn(int) -> int] = [double, triple];
+print(to_str_int(fs[0](2)));
+print(to_str_int(fs[1](2)));
+
+let base: int = 100;
+let add_base: fn(int) -> int = fn(x: int) -> int {
+    return x + base;
+};
+print(to_str_int(add_base(5)));
+
+let xs: [int] = [1, 2, 3, 4];
+let doubled: [int] = array.map_fn(xs, fn(x: int) -> int { return x * 2; });
+print(to_str_int(doubled[3]));
+
+let big: [int] = array.filter_fn(xs, fn(x: int) -> bool { return x > 2; });
+print(to_str_int(array.len(big)));
+
+let sum: int = array.reduce(xs, 0, fn(acc: int, x: int) -> int { return acc + x; });
+print(to_str_int(sum));

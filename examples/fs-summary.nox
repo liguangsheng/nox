@@ -1,0 +1,19 @@
+import "std/fs.nox" as fs;
+import "std/path.nox" as path;
+
+let manifest: str = "Cargo.toml";
+let root: str = ".";
+let entries: result[[str], str] = fs.list_dir(root);
+
+match (entries) {
+    ok(names) => {
+        if (fs.is_file(manifest) && fs.is_dir(root) && len(names) > 0) {
+            "fs-ok";
+        } else {
+            "fs-bad";
+        }
+    }
+    err(message) => {
+        message;
+    }
+}

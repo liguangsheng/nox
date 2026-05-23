@@ -1,0 +1,11 @@
+let flags: int = 0b1010 | 0b0101;
+let masked: int = flags & 0b0110;
+let toggled: int = masked ^ 0b0011;
+let shifted: int = (toggled << 2) >> 1;
+let inverted: int = ~0;
+
+if (shifted + inverted == 9) {
+    "bitwise-ok";
+} else {
+    "bitwise-bad";
+}

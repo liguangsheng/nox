@@ -3,5 +3,9 @@ record User {
     score: int,
 }
 
+fn score_with_bonus(user: User, bonus: int) -> int {
+    return user.score + bonus;
+}
+
 let user: User = User { name: "nox", score: 40 };
-user.score + 2;
+user.score_with_bonus(2);

@@ -1,0 +1,11 @@
+enum LoadState {
+    Loading,
+    Ready(int),
+}
+
+let state: LoadState = LoadState.Loading;
+match (state) {
+    Loading => {
+        0;
+    }
+}

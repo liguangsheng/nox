@@ -28,6 +28,9 @@ typedef enum NoxCoreValueKind {
     NOX_CORE_VALUE_RECORD = 8,
     NOX_CORE_VALUE_OPTION = 9,
     NOX_CORE_VALUE_RESULT = 10,
+    NOX_CORE_VALUE_JSON = 11,
+    NOX_CORE_VALUE_TUPLE = 12,
+    NOX_CORE_VALUE_ENUM = 13,
 } NoxCoreValueKind;
 
 typedef struct NoxCoreValue {
@@ -129,6 +132,27 @@ NoxCoreStatus nox_core_engine_register_host_function(
     NoxCoreValueKind return_type,
     NoxCoreHostCallback callback,
     void *ctx
+);
+/*
+ * Extended host callback registration with metadata.
+ *
+ * docstring may be NULL. capabilities may be NULL only when capability_count
+ * is zero; otherwise it must point to capability_count NUL-terminated UTF-8
+ * strings. All strings are copied during registration. Callback lifetime,
+ * ctx ownership, same-thread execution, and non-reentrant engine rules are the
+ * same as nox_core_engine_register_host_function.
+ */
+NoxCoreStatus nox_core_engine_register_host_function_ex(
+    NoxCoreEngine *engine,
+    const char *name,
+    const NoxCoreValueKind *param_types,
+    size_t param_count,
+    NoxCoreValueKind return_type,
+    NoxCoreHostCallback callback,
+    void *ctx,
+    const char *docstring,
+    const char *const *capabilities,
+    size_t capability_count
 );
 NoxCoreStatus nox_core_engine_eval(
     NoxCoreEngine *engine,

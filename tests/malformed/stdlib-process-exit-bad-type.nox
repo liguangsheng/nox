@@ -1,0 +1,3 @@
+import "std/process.nox" as process;
+
+process.exit("nope");

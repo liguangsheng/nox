@@ -13,13 +13,13 @@ The workspace contains two crates:
 
 ## Status
 
-The latest production release is `v0.0.2`. For that version, the Cargo version, git tag, CHANGELOG, release checklist, GitHub Release, remote CI, local release gate, and distribution smoke tests are aligned.
+The latest production release is `v0.0.4`. For that version, the Cargo version, git tag, CHANGELOG, release checklist, GitHub Release, remote CI, local release gate, and distribution smoke tests are aligned.
 
 Future `0.0.x` versions may still evolve the language, runtime, and embedding APIs. Breaking changes must be called out in the CHANGELOG, relevant documentation, and release notes.
 
 Production readiness is defined in engineering release terms: no known high-severity defects, no undocumented compatibility breakage, conservative default permissions, and auditable, rollback-capable release steps. It is not a mathematical zero-risk claim.
 
-The first language slice is implemented: spanned tokens, recursive-descent parsing, static type checking, flat bytecode compilation, a VM, typed variables, typed functions, calls, blocks, `if`, `while`, half-open `for` ranges, `return`, arrays, `map[str, T]`, named `record` values, relative imports, and `export` visibility.
+The first language slice is implemented: spanned tokens, recursive-descent parsing, static type checking, flat bytecode compilation, a VM, typed variables, typed functions, calls, blocks, `if`, `while`, half-open `for` ranges, `return`, arrays, `map[str, T]`, `json`, named `record` values, relative imports, and `export` visibility.
 
 The default runtime resolves `import "..."` relative to the entry file and installs a small typed standard library. Prefer static module imports for file, environment, and time capabilities, for example `import "std/fs.nox" as fs;`. Older global functions remain available as compatibility surface. Runtime permissions are explicit: the CLI only grants the filesystem read access needed for the entry file and imports by default. Environment variables, timers, networking, and async task helpers require separate permissions.
 
@@ -27,39 +27,59 @@ The default runtime resolves `import "..."` relative to the entry file and insta
 
 ### Use Release Packages
 
-GitHub Releases split the command-line tool and embedding SDK starting with `v0.0.2`:
+GitHub Releases split the command-line tool and embedding SDK starting with `v0.0.3`:
 
-- `nox-cli-v0.0.2-x86_64-unknown-linux-gnu.tar.gz`: for CLI users. It contains `bin/nox`, README files, the CHANGELOG, and script examples.
-- `nox-embed-v0.0.2-x86_64-unknown-linux-gnu.tar.gz`: for host applications. It contains `lib/libnox_core.so`, `include/nox_core.h`, README files, the CHANGELOG, and a C embedding example.
+- `nox-cli-v0.0.4-x86_64-unknown-linux-gnu.tar.gz`: for CLI users. It contains `bin/nox`, README files, the CHANGELOG, and script examples.
+- `nox-embed-v0.0.4-x86_64-unknown-linux-gnu.tar.gz`: for host applications. It contains `lib/libnox_core.so`, `include/nox_core.h`, README files, the CHANGELOG, and a C embedding example.
 
 Download, verify, and install the CLI to `/usr/local/bin/nox`:
 
 ```sh
-curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.2/nox-cli-v0.0.2-x86_64-unknown-linux-gnu.tar.gz
-curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.2/nox-cli-v0.0.2-x86_64-unknown-linux-gnu.sha256
-sha256sum -c nox-cli-v0.0.2-x86_64-unknown-linux-gnu.sha256
-tar -xzf nox-cli-v0.0.2-x86_64-unknown-linux-gnu.tar.gz
-sudo install -m 0755 nox-cli-v0.0.2-x86_64-unknown-linux-gnu/bin/nox /usr/local/bin/nox
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.4/nox-cli-v0.0.4-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.4/nox-cli-v0.0.4-x86_64-unknown-linux-gnu.sha256
+sha256sum -c nox-cli-v0.0.4-x86_64-unknown-linux-gnu.sha256
+tar -xzf nox-cli-v0.0.4-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 nox-cli-v0.0.4-x86_64-unknown-linux-gnu/bin/nox /usr/local/bin/nox
 nox --version
-nox run ./nox-cli-v0.0.2-x86_64-unknown-linux-gnu/examples/hello.nox
+nox run ./nox-cli-v0.0.4-x86_64-unknown-linux-gnu/examples/hello.nox
 ```
 
 Download and verify the embedding SDK:
 
 ```sh
-curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.2/nox-embed-v0.0.2-x86_64-unknown-linux-gnu.tar.gz
-curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.2/nox-embed-v0.0.2-x86_64-unknown-linux-gnu.sha256
-sha256sum -c nox-embed-v0.0.2-x86_64-unknown-linux-gnu.sha256
-tar -xzf nox-embed-v0.0.2-x86_64-unknown-linux-gnu.tar.gz
-cc -Inox-embed-v0.0.2-x86_64-unknown-linux-gnu/include \
-  nox-embed-v0.0.2-x86_64-unknown-linux-gnu/examples/embed/c_embedding.c \
-  -Lnox-embed-v0.0.2-x86_64-unknown-linux-gnu/lib -lnox_core \
-  -Wl,-rpath,"$PWD/nox-embed-v0.0.2-x86_64-unknown-linux-gnu/lib" \
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.4/nox-embed-v0.0.4-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.4/nox-embed-v0.0.4-x86_64-unknown-linux-gnu.sha256
+sha256sum -c nox-embed-v0.0.4-x86_64-unknown-linux-gnu.sha256
+tar -xzf nox-embed-v0.0.4-x86_64-unknown-linux-gnu.tar.gz
+cc -Inox-embed-v0.0.4-x86_64-unknown-linux-gnu/include \
+  nox-embed-v0.0.4-x86_64-unknown-linux-gnu/examples/embed/c_embedding.c \
+  -Lnox-embed-v0.0.4-x86_64-unknown-linux-gnu/lib -lnox_core \
+  -Wl,-rpath,"$PWD/nox-embed-v0.0.4-x86_64-unknown-linux-gnu/lib" \
   -o /tmp/nox-c-embedding-smoke
 /tmp/nox-c-embedding-smoke
 ```
 
 Current release assets only commit to `x86_64-unknown-linux-gnu`. Build from source for other platforms.
+
+### Install with Cargo
+
+Install the CLI directly from a published tag (works on any platform with a Rust toolchain):
+
+```sh
+cargo install --git https://github.com/liguangsheng/nox --tag v0.0.4 --locked nox
+nox --version
+```
+
+Or from a local checkout (useful for tracking `main` or applying patches):
+
+```sh
+git clone https://github.com/liguangsheng/nox
+cd nox
+cargo install --path crates/nox --locked
+nox --version
+```
+
+Both forms install to `~/.cargo/bin/nox`. Run `cargo uninstall nox` to remove it. The `nox_core` C ABI dynamic library is not produced by `cargo install`; embedding hosts should use the `nox-embed` release tarball or `cargo build --release -p nox_core`.
 
 ### Build From Source
 
@@ -98,8 +118,19 @@ More examples are available under `examples/`:
 - `for-range.nox`: half-open `int` range loops.
 - `match.nox`: limited `match` branches.
 - `numeric-boundaries.nox`: integer division and explicit numeric conversion boundaries.
+- `print.nox`: `print` and `to_str_int` output helpers.
 - `recursion.nox`: recursive function calls.
 - `records.nox`: named records, record literals, and field access.
+- `result-chain.nox`: `?` propagation for `result` and `option` chains.
+- `collections-config.nox`: copy-oriented `std/map.nox` helpers for config merging.
+- `collections-summary.nox`: `std/array.nox` and `std/map.nox` sorting and summary helpers.
+- `error-summary.nox`: `std/option.nox` and `std/result.nox` status and fallback helpers.
+- `process-stdio.nox`: `std/process.nox` argv, stdin, stderr, and exit-code helpers.
+- `path-summary.nox`: `std/path.nox` join, normalize, basename, dirname, and extension helpers.
+- `fs-summary.nox`: `std/fs.nox` file classification and directory listing helpers.
+- `strings.nox`: typed strings, concatenation, `${expr}` interpolation, and `std/string.nox` helpers.
+- `json.nox`: `std/json.nox` parse/stringify plus kind and array/object helpers.
+- `delimited-text.nox`: `std/csv.nox` and `std/tsv.nox` line parsing and formatting helpers.
 - `stdlib.nox`: default runtime host function calls.
 - `projects/scoreboard/`: a multi-module project with `nox.toml`, namespace imports, and source/test directories.
 - `tests/fixtures/type-error*.nox`, `tests/fixtures/syntax-errors.nox`, and

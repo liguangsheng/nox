@@ -1,25 +1,25 @@
-import "checks.nox" as checks;
+import "checks.nox";
 
 fn test_file_present_true() -> bool {
-    return checks.file_present("nox.toml");
+    return file_present("nox.toml");
 }
 
 fn test_count_present_counts_true_flags() -> bool {
-    let flags: [bool] = [true, false, true, true];
-    return checks.count_present(flags) == 3;
+    let flags: HealthFlags = HealthFlags {manifest_ok: true, user_present: false};
+    return flags.count_present() == 1;
 }
 
 fn test_pick_env_value_returns_text_when_some_non_empty() -> bool {
     let present: option[str] = some("configured");
-    return checks.pick_env_value(present, "fallback") == "configured";
+    return pick_env_value(present, "fallback") == "configured";
 }
 
 fn test_pick_env_value_returns_fallback_for_none() -> bool {
     let missing: option[str] = none;
-    return checks.pick_env_value(missing, "fallback") == "fallback";
+    return pick_env_value(missing, "fallback") == "fallback";
 }
 
 fn test_pick_env_value_returns_fallback_for_empty_some() -> bool {
     let empty: option[str] = some("");
-    return checks.pick_env_value(empty, "fallback") == "fallback";
+    return pick_env_value(empty, "fallback") == "fallback";
 }

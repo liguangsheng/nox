@@ -8,3 +8,13 @@ version.workspace = true
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "core_paths"
+harness = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }

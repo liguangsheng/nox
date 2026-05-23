@@ -1,5 +1,69 @@
+import "std/string.nox" as string;
+
 fn label(name: str, status: str) -> str {
     return name + ":" + status;
 }
 
-label("nox", "typed");
+let raw: str = " NOX_TYPED ";
+let multiline: str = """line one
+line two""";
+let raw_path: str = r"C:\nox\${literal}";
+let marker: str = 'N';
+let normalized: str = string.to_lower(string.replace(string.trim(raw), "_", ":"));
+let parts: [str] = string.split(normalized, ":");
+let rejoined: str = string.join(parts, "|");
+let prefix: str = string.substring(normalized, 0, 3);
+let repeated: str = string.repeat("ha", 2);
+let padded: str = string.pad_left("7", 3, "0") + ":" + string.pad_right("x", 3, ".");
+let parsed_count: result[int, str] = string.parse_int("2");
+let parsed_ratio: result[float, str] = string.parse_float("2.5");
+let line_values: [str] = string.lines("first\nsecond\n");
+let rendered: str = "runtime=${parts[0]}, mode=${parts[1]}, len=${len(normalized)}";
+let parsed_ok: bool = false;
+let float_ok: bool = false;
+
+match (parsed_count) {
+    ok(value) => {
+        parsed_ok = value == 2;
+    }
+    err(message) => {
+        parsed_ok = false;
+    }
+}
+
+match (parsed_ratio) {
+    ok(value) => {
+        float_ok = value == 2.5;
+    }
+    err(message) => {
+        float_ok = false;
+    }
+}
+
+if (
+    len(parts) == 2 &&
+    parts[0] == "nox" &&
+    parts[1] == "typed" &&
+    rejoined == "nox|typed" &&
+    prefix == "nox" &&
+    string.starts_with(normalized, "nox") &&
+    string.ends_with(normalized, "typed") &&
+    string.index_of(normalized, ":") == 3 &&
+    string.contains(normalized, ":") &&
+    string.last_index_of("nox:nox", "nox") == 4 &&
+    repeated == "haha" &&
+    padded == "007:x.." &&
+    len(line_values) == 2 &&
+    line_values[0] == "first" &&
+    parsed_ok &&
+    float_ok &&
+    string.to_upper("ok") == "OK" &&
+    rendered == "runtime=nox, mode=typed, len=9" &&
+    multiline == "line one\nline two" &&
+    raw_path == "C:\\nox\\\${literal}" &&
+    marker == "N"
+) {
+    label(parts[0], parts[1]);
+} else {
+    "strings-bad";
+}

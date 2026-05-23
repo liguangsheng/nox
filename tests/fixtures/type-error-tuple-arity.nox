@@ -1,0 +1,2 @@
+let pair: (int, str) = (1, "ok");
+let (left, middle, right) = pair;

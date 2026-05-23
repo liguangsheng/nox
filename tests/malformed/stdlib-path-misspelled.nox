@@ -1,0 +1,5 @@
+import "std/path.nox" as path;
+
+let p: str = "/tmp/file.txt";
+let base: str = path.basenam(p);
+base;

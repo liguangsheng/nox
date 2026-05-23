@@ -1,0 +1,14 @@
+let base: [int] = [1, 2];
+let extra: [int] = [4, 5];
+let values: [int] = [0, ...base, 3, ...extra];
+
+let first: map[str, int] = {"a": 1, "b": 2};
+let second: map[str, int] = {"b": 20, "c": 3};
+let merged: map[str, int] = {...first, ...second, "d": 4};
+
+if (values[0] + values[1] + values[2] + values[3] + values[4] + values[5]
+    + merged["a"] + merged["b"] + merged["c"] + merged["d"] == 43) {
+    "spread-ok";
+} else {
+    "spread-bad";
+}

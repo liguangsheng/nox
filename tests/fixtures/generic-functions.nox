@@ -1,0 +1,15 @@
+fn id<T>(value: T) -> T {
+    return value;
+}
+
+fn wrap<T>(value: T) -> [T] {
+    return [value];
+}
+
+let value: int = id(42);
+let values: [str] = wrap("nox");
+if (len(values) == 1) {
+    "generic:" + to_str_int(value);
+} else {
+    "bad";
+}

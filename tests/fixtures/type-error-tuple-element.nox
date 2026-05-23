@@ -1,0 +1,1 @@
+let pair: (int, str) = (1, 2);

@@ -1,8 +1,11 @@
-use std::fmt::Write;
+use std::{
+    collections::{BTreeMap, HashSet},
+    fmt::Write,
+};
 
 use crate::{
-    vm::flat_instruction_span, BinaryOp, Diagnostic, Expr, ExprKind, MatchCaseValue, Module, Param,
-    Span, Stmt, Type, UnaryOp, Value,
+    vm::flat_instruction_span, ArrayElement, BinaryOp, Diagnostic, Expr, ExprKind, MapEntry,
+    MatchCaseValue, Module, Param, Span, Stmt, StringInterpolationPart, Type, UnaryOp, Value,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -18,19 +21,6 @@ impl BytecodeModule {
                 .expect("writing to String cannot fail");
         }
         output
-    }
-}
-
-fn match_case_value(value: &MatchCaseValue) -> Value {
-    match value {
-        MatchCaseValue::Int(value) => Value::Int(*value),
-        MatchCaseValue::Str(value) => Value::string(value.clone()),
-        MatchCaseValue::Some(_)
-        | MatchCaseValue::None
-        | MatchCaseValue::Ok(_)
-        | MatchCaseValue::Err(_) => {
-            unreachable!("option/result match cases do not lower through literal values")
-        }
     }
 }
 
@@ -54,6 +44,7 @@ pub(crate) enum Instruction {
     },
     Function {
         name: String,
+        type_params: Vec<String>,
         params: Vec<Param>,
         return_type: Type,
         body: BytecodeModule,
@@ -67,18 +58,40 @@ pub(crate) enum Instruction {
         op: BinaryOp,
         span: Span,
     },
+    StringInterpolate {
+        parts: Vec<StringInterpolationInstructionPart>,
+        span: Span,
+    },
+    Question {
+        return_type: Type,
+        span: Span,
+    },
+    MatchPattern {
+        pattern: MatchCaseValue,
+        span: Span,
+    },
     Call {
         arg_count: usize,
         span: Span,
     },
+    JsonDecode {
+        target_type: Type,
+        schema: JsonDecodeSchema,
+        span: Span,
+    },
     Array {
         element_type: Type,
+        elements: Vec<ArrayInstructionElement>,
+        span: Span,
+    },
+    Tuple {
+        element_types: Vec<Type>,
         element_count: usize,
         span: Span,
     },
     Map {
         value_type: Type,
-        entry_count: usize,
+        entries: Vec<MapInstructionEntry>,
         span: Span,
     },
     Option {
@@ -92,6 +105,12 @@ pub(crate) enum Instruction {
         is_ok: bool,
         span: Span,
     },
+    EnumVariant {
+        enum_name: String,
+        variant_name: String,
+        has_payload: bool,
+        span: Span,
+    },
     Record {
         name: String,
         fields: Vec<String>,
@@ -100,8 +119,19 @@ pub(crate) enum Instruction {
     Index {
         span: Span,
     },
+    IndexAssign {
+        span: Span,
+    },
     Field {
         name: String,
+        span: Span,
+    },
+    RecordElement {
+        name: String,
+        span: Span,
+    },
+    TupleElement {
+        index: usize,
         span: Span,
     },
     ArrayLen {
@@ -110,19 +140,25 @@ pub(crate) enum Instruction {
     MapContains {
         span: Span,
     },
-    MapGet {
+    MapKeys {
         span: Span,
     },
-    OptionIsSome {
+    MapValues {
+        span: Span,
+    },
+    MapSize {
+        span: Span,
+    },
+    MapGet {
         span: Span,
     },
     OptionPayload {
         span: Span,
     },
-    ResultIsOk {
+    ResultPayload {
         span: Span,
     },
-    ResultPayload {
+    EnumPayload {
         span: Span,
     },
     Pop {
@@ -165,6 +201,24 @@ pub(crate) enum Instruction {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArrayInstructionElement {
+    Expr,
+    Spread,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MapInstructionEntry {
+    Entry,
+    Spread,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct JsonDecodeSchema {
+    pub(crate) records: BTreeMap<String, Vec<(String, Type)>>,
+    pub(crate) enums: BTreeMap<String, Vec<(String, Option<Type>)>>,
+}
+
 impl Instruction {
     fn format_compact(&self) -> String {
         match self {
@@ -191,20 +245,55 @@ impl Instruction {
             }
             Self::Unary { op, .. } => format!("Unary {op:?}"),
             Self::Binary { op, .. } => format!("Binary {op:?}"),
+            Self::StringInterpolate { parts, .. } => {
+                let expression_count = parts
+                    .iter()
+                    .filter(|part| matches!(part, StringInterpolationInstructionPart::Expression))
+                    .count();
+                format!(
+                    "StringInterpolate parts={} exprs={expression_count}",
+                    parts.len()
+                )
+            }
+            Self::Question { return_type, .. } => format!("Question return={return_type}"),
+            Self::MatchPattern { pattern, .. } => format!("MatchPattern {pattern:?}"),
             Self::Call { arg_count, .. } => format!("Call argc={arg_count}"),
+            Self::JsonDecode { target_type, .. } => format!("JsonDecode {target_type}"),
             Self::Array {
                 element_type,
+                elements,
+                ..
+            } => {
+                let element_count = elements
+                    .iter()
+                    .filter(|element| matches!(element, ArrayInstructionElement::Expr))
+                    .count();
+                let spread_count = elements.len() - element_count;
+                format!("Array [{element_type}; {element_count} values, {spread_count} spreads]")
+            }
+            Self::Tuple {
+                element_types,
                 element_count,
                 ..
             } => {
-                format!("Array [{element_type}; {element_count}]")
+                let types = element_types
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("Tuple ({types}; {element_count})")
             }
             Self::Map {
                 value_type,
-                entry_count,
+                entries,
                 ..
             } => {
-                format!("Map map[str, {value_type}; {entry_count}]")
+                let entry_count = entries
+                    .iter()
+                    .filter(|entry| matches!(entry, MapInstructionEntry::Entry))
+                    .count();
+                let spread_count = entries.len() - entry_count;
+                format!("Map map[str, {value_type}; {entry_count} entries, {spread_count} spreads]")
             }
             Self::Option {
                 payload_type,
@@ -229,18 +318,35 @@ impl Instruction {
                     format!("Result err[{ok_type}, {err_type}]")
                 }
             }
+            Self::EnumVariant {
+                enum_name,
+                variant_name,
+                has_payload,
+                ..
+            } => {
+                if *has_payload {
+                    format!("Enum {enum_name}.{variant_name}(payload)")
+                } else {
+                    format!("Enum {enum_name}.{variant_name}")
+                }
+            }
             Self::Record { name, fields, .. } => {
                 format!("Record {name} {{{}}}", fields.join(", "))
             }
             Self::Index { .. } => "Index".to_string(),
+            Self::IndexAssign { .. } => "IndexAssign".to_string(),
             Self::Field { name, .. } => format!("Field {name}"),
+            Self::RecordElement { name, .. } => format!("RecordElement {name}"),
+            Self::TupleElement { index, .. } => format!("TupleElement {index}"),
             Self::ArrayLen { .. } => "ArrayLen".to_string(),
             Self::MapContains { .. } => "MapContains".to_string(),
+            Self::MapKeys { .. } => "MapKeys".to_string(),
+            Self::MapValues { .. } => "MapValues".to_string(),
+            Self::MapSize { .. } => "MapSize".to_string(),
             Self::MapGet { .. } => "MapGet".to_string(),
-            Self::OptionIsSome { .. } => "OptionIsSome".to_string(),
             Self::OptionPayload { .. } => "OptionPayload".to_string(),
-            Self::ResultIsOk { .. } => "ResultIsOk".to_string(),
             Self::ResultPayload { .. } => "ResultPayload".to_string(),
+            Self::EnumPayload { .. } => "EnumPayload".to_string(),
             Self::Pop { .. } => "Pop".to_string(),
             Self::Drop { .. } => "Drop".to_string(),
             Self::Return { .. } => "Return".to_string(),
@@ -261,18 +367,25 @@ impl Instruction {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum StatementInstruction {
     Let {
-        name: String,
+        target: crate::BindingTarget,
         initializer: ByteExpr,
         span: Span,
     },
     Function {
         name: String,
+        type_params: Vec<String>,
         params: Vec<Param>,
         return_type: Type,
         body: BytecodeModule,
         span: Span,
     },
     Record {
+        span: Span,
+    },
+    TypeAlias {
+        span: Span,
+    },
+    Enum {
         span: Span,
     },
     Return {
@@ -285,14 +398,33 @@ pub(crate) enum StatementInstruction {
         else_body: BytecodeModule,
         span: Span,
     },
+    IfLet {
+        pattern: MatchCaseValue,
+        value: ByteExpr,
+        then_body: BytecodeModule,
+        else_body: BytecodeModule,
+        span: Span,
+    },
     Match {
         value: ByteExpr,
         cases: Vec<ByteMatchCase>,
         default: BytecodeModule,
         span: Span,
     },
+    LetElse {
+        pattern: MatchCaseValue,
+        value: ByteExpr,
+        else_body: BytecodeModule,
+        span: Span,
+    },
     While {
         condition: ByteExpr,
+        body: BytecodeModule,
+        span: Span,
+    },
+    WhileLet {
+        pattern: MatchCaseValue,
+        value: ByteExpr,
         body: BytecodeModule,
         span: Span,
     },
@@ -321,7 +453,7 @@ pub(crate) enum StatementInstruction {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ByteMatchCase {
-    value: MatchCaseValue,
+    pattern: MatchCaseValue,
     body: BytecodeModule,
     span: Span,
 }
@@ -330,6 +462,18 @@ pub(crate) struct ByteMatchCase {
 pub(crate) struct ByteExpr {
     pub(crate) kind: ByteExprKind,
     pub(crate) span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ByteArrayElement {
+    Expr(ByteExpr),
+    Spread(ByteExpr),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ByteMapEntry {
+    Entry { key: ByteExpr, value: ByteExpr },
+    Spread(ByteExpr),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -349,17 +493,33 @@ pub(crate) enum ByteExprKind {
         op: BinaryOp,
         right: Box<ByteExpr>,
     },
+    StringInterpolation {
+        parts: Vec<ByteStringInterpolationPart>,
+    },
+    Question {
+        value: Box<ByteExpr>,
+        return_type: Type,
+    },
     Call {
         callee: Box<ByteExpr>,
         args: Vec<ByteExpr>,
     },
+    JsonDecode {
+        value: Box<ByteExpr>,
+        target_type: Type,
+        schema: JsonDecodeSchema,
+    },
     ArrayLiteral {
         element_type: Type,
+        elements: Vec<ByteArrayElement>,
+    },
+    TupleLiteral {
+        element_types: Vec<Type>,
         elements: Vec<ByteExpr>,
     },
     MapLiteral {
         value_type: Type,
-        entries: Vec<(ByteExpr, ByteExpr)>,
+        entries: Vec<ByteMapEntry>,
     },
     Some {
         payload_type: Type,
@@ -378,6 +538,11 @@ pub(crate) enum ByteExprKind {
         err_type: Type,
         payload: Box<ByteExpr>,
     },
+    EnumVariant {
+        enum_name: String,
+        variant_name: String,
+        payload: Option<Box<ByteExpr>>,
+    },
     RecordLiteral {
         name: String,
         fields: Vec<(String, ByteExpr)>,
@@ -385,6 +550,16 @@ pub(crate) enum ByteExprKind {
     Index {
         array: Box<ByteExpr>,
         index: Box<ByteExpr>,
+    },
+    IndexAssign {
+        container: Box<ByteExpr>,
+        index: Box<ByteExpr>,
+        value: Box<ByteExpr>,
+    },
+    FunctionLiteral {
+        params: Vec<Param>,
+        return_type: Type,
+        body: BytecodeModule,
     },
     Field {
         receiver: Box<ByteExpr>,
@@ -397,13 +572,37 @@ pub(crate) enum ByteExprKind {
         map: Box<ByteExpr>,
         key: Box<ByteExpr>,
     },
+    MapKeys {
+        map: Box<ByteExpr>,
+    },
+    MapValues {
+        map: Box<ByteExpr>,
+    },
+    MapSize {
+        map: Box<ByteExpr>,
+    },
     MapGet {
         map: Box<ByteExpr>,
         key: Box<ByteExpr>,
     },
 }
 
-pub(crate) struct Compiler;
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum StringInterpolationInstructionPart {
+    Text(String),
+    Expression,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ByteStringInterpolationPart {
+    text: String,
+    expression: Option<ByteExpr>,
+}
+
+pub(crate) struct Compiler {
+    enum_names: HashSet<String>,
+    json_decode_schema: JsonDecodeSchema,
+}
 
 pub(crate) fn verify(module: &BytecodeModule) -> Result<(), Diagnostic> {
     Verifier::new(module).verify()
@@ -553,11 +752,29 @@ impl<'a> Verifier<'a> {
                 self.pop(2, *span)?;
                 self.push(1);
             }
+            Instruction::StringInterpolate { parts, span } => {
+                let expression_count = parts
+                    .iter()
+                    .filter(|part| matches!(part, StringInterpolationInstructionPart::Expression))
+                    .count();
+                self.pop(expression_count, *span)?;
+                self.push(1);
+            }
+            Instruction::Question { span, .. } => {
+                self.pop(1, *span)?;
+                self.push(1);
+            }
+            Instruction::MatchPattern { span, .. } => self.require(1, *span)?,
             Instruction::Call { arg_count, span } => {
                 self.pop(arg_count + 1, *span)?;
                 self.push(1);
             }
-            Instruction::Array {
+            Instruction::JsonDecode { span, .. } => self.require(1, *span)?,
+            Instruction::Array { elements, span, .. } => {
+                self.pop(elements.len(), *span)?;
+                self.push(1);
+            }
+            Instruction::Tuple {
                 element_count,
                 span,
                 ..
@@ -565,10 +782,15 @@ impl<'a> Verifier<'a> {
                 self.pop(*element_count, *span)?;
                 self.push(1);
             }
-            Instruction::Map {
-                entry_count, span, ..
-            } => {
-                self.pop(entry_count * 2, *span)?;
+            Instruction::Map { entries, span, .. } => {
+                let value_count = entries
+                    .iter()
+                    .map(|entry| match entry {
+                        MapInstructionEntry::Entry => 2,
+                        MapInstructionEntry::Spread => 1,
+                    })
+                    .sum::<usize>();
+                self.pop(value_count, *span)?;
                 self.push(1);
             }
             Instruction::Option {
@@ -583,6 +805,14 @@ impl<'a> Verifier<'a> {
                 self.pop(1, *span)?;
                 self.push(1);
             }
+            Instruction::EnumVariant {
+                has_payload, span, ..
+            } => {
+                if *has_payload {
+                    self.pop(1, *span)?;
+                }
+                self.push(1);
+            }
             Instruction::Record { fields, span, .. } => {
                 self.pop(fields.len(), *span)?;
                 self.push(1);
@@ -591,20 +821,34 @@ impl<'a> Verifier<'a> {
                 self.pop(2, *span)?;
                 self.push(1);
             }
+            Instruction::IndexAssign { span } => {
+                self.pop(3, *span)?;
+                self.push(1);
+            }
             Instruction::Field { span, .. } => self.require(1, *span)?,
+            Instruction::RecordElement { span, .. } => {
+                self.require(1, *span)?;
+                self.push(1);
+            }
+            Instruction::TupleElement { span, .. } => {
+                self.require(1, *span)?;
+                self.push(1);
+            }
             Instruction::ArrayLen { span } => self.require(1, *span)?,
             Instruction::MapContains { span } => {
                 self.pop(2, *span)?;
                 self.push(1);
             }
+            Instruction::MapKeys { span }
+            | Instruction::MapValues { span }
+            | Instruction::MapSize { span } => self.require(1, *span)?,
             Instruction::MapGet { span } => {
                 self.pop(2, *span)?;
                 self.push(1);
             }
-            Instruction::OptionIsSome { span }
-            | Instruction::OptionPayload { span }
-            | Instruction::ResultIsOk { span }
-            | Instruction::ResultPayload { span } => self.require(1, *span)?,
+            Instruction::OptionPayload { span }
+            | Instruction::ResultPayload { span }
+            | Instruction::EnumPayload { span } => self.require(1, *span)?,
             Instruction::Pop { span }
             | Instruction::Drop { span }
             | Instruction::Return { span } => {
@@ -688,8 +932,50 @@ impl<'a> Verifier<'a> {
 }
 
 impl Compiler {
-    pub(crate) fn compile_module(&self, module: &Module) -> BytecodeModule {
-        self.compile_statements(&module.statements)
+    pub(crate) fn compile_module(module: &Module) -> BytecodeModule {
+        let enum_names = module
+            .statements
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Enum { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
+        let json_decode_schema = JsonDecodeSchema {
+            records: module
+                .statements
+                .iter()
+                .filter_map(|statement| match statement {
+                    Stmt::Record { name, fields, .. } => Some((
+                        name.clone(),
+                        fields
+                            .iter()
+                            .map(|field| (field.name.clone(), field.ty.clone()))
+                            .collect(),
+                    )),
+                    _ => None,
+                })
+                .collect(),
+            enums: module
+                .statements
+                .iter()
+                .filter_map(|statement| match statement {
+                    Stmt::Enum { name, variants, .. } => Some((
+                        name.clone(),
+                        variants
+                            .iter()
+                            .map(|variant| (variant.name.clone(), variant.payload.clone()))
+                            .collect(),
+                    )),
+                    _ => None,
+                })
+                .collect(),
+        };
+        Self {
+            enum_names,
+            json_decode_schema,
+        }
+        .compile_statements(&module.statements)
     }
 
     fn compile_statements(&self, statements: &[Stmt]) -> BytecodeModule {
@@ -720,19 +1006,25 @@ impl Compiler {
         match statement {
             Stmt::Import { .. } => unreachable!("imports are resolved before compilation"),
             Stmt::Let {
-                name,
+                target,
                 ty,
                 initializer,
                 exported: _,
                 is_const: _,
                 span,
             } => StatementInstruction::Let {
-                name: name.clone(),
-                initializer: self.compile_expr_with_expected(initializer, Some(ty)),
+                target: target.clone(),
+                initializer: self.compile_expr_with_context(
+                    initializer,
+                    ty.as_ref(),
+                    current_return,
+                ),
                 span: *span,
             },
             Stmt::Function {
                 name,
+                type_params,
+                type_param_constraints: _,
                 params,
                 return_type,
                 body,
@@ -740,14 +1032,17 @@ impl Compiler {
                 span,
             } => StatementInstruction::Function {
                 name: name.clone(),
+                type_params: type_params.clone(),
                 params: params.clone(),
                 return_type: return_type.clone(),
                 body: self.compile_statements_with_return(body, Some(return_type)),
                 span: *span,
             },
             Stmt::Record { span, .. } => StatementInstruction::Record { span: *span },
+            Stmt::TypeAlias { span, .. } => StatementInstruction::TypeAlias { span: *span },
+            Stmt::Enum { span, .. } => StatementInstruction::Enum { span: *span },
             Stmt::Return { value, span } => StatementInstruction::Return {
-                value: self.compile_expr_with_expected(value, current_return),
+                value: self.compile_expr_with_context(value, current_return, current_return),
                 span: *span,
             },
             Stmt::If {
@@ -756,7 +1051,20 @@ impl Compiler {
                 else_branch,
                 span,
             } => StatementInstruction::If {
-                condition: self.compile_expr(condition),
+                condition: self.compile_expr_with_context(condition, None, current_return),
+                then_body: self.compile_statements_with_return(then_branch, current_return),
+                else_body: self.compile_statements_with_return(else_branch, current_return),
+                span: *span,
+            },
+            Stmt::IfLet {
+                pattern,
+                value,
+                then_branch,
+                else_branch,
+                span,
+            } => StatementInstruction::IfLet {
+                pattern: pattern.clone(),
+                value: self.compile_expr_with_context(value, None, current_return),
                 then_body: self.compile_statements_with_return(then_branch, current_return),
                 else_body: self.compile_statements_with_return(else_branch, current_return),
                 span: *span,
@@ -767,11 +1075,11 @@ impl Compiler {
                 default,
                 span,
             } => StatementInstruction::Match {
-                value: self.compile_expr(value),
+                value: self.compile_expr_with_context(value, None, current_return),
                 cases: cases
                     .iter()
                     .map(|case| ByteMatchCase {
-                        value: case.value.clone(),
+                        pattern: case.pattern.clone(),
                         body: self.compile_statements_with_return(&case.body, current_return),
                         span: case.span,
                     })
@@ -782,12 +1090,34 @@ impl Compiler {
                 ),
                 span: *span,
             },
+            Stmt::LetElse {
+                pattern,
+                value,
+                else_branch,
+                span,
+            } => StatementInstruction::LetElse {
+                pattern: pattern.clone(),
+                value: self.compile_expr_with_context(value, None, current_return),
+                else_body: self.compile_statements_with_return(else_branch, current_return),
+                span: *span,
+            },
             Stmt::While {
                 condition,
                 body,
                 span,
             } => StatementInstruction::While {
-                condition: self.compile_expr(condition),
+                condition: self.compile_expr_with_context(condition, None, current_return),
+                body: self.compile_statements_with_return(body, current_return),
+                span: *span,
+            },
+            Stmt::WhileLet {
+                pattern,
+                value,
+                body,
+                span,
+            } => StatementInstruction::WhileLet {
+                pattern: pattern.clone(),
+                value: self.compile_expr_with_context(value, None, current_return),
                 body: self.compile_statements_with_return(body, current_return),
                 span: *span,
             },
@@ -799,8 +1129,8 @@ impl Compiler {
                 span,
             } => StatementInstruction::For {
                 name: name.clone(),
-                start: self.compile_expr(start),
-                end: self.compile_expr(end),
+                start: self.compile_expr_with_context(start, None, current_return),
+                end: self.compile_expr_with_context(end, None, current_return),
                 body: self.compile_statements_with_return(body, current_return),
                 span: *span,
             },
@@ -811,17 +1141,18 @@ impl Compiler {
             Stmt::Break { span } => StatementInstruction::Break { span: *span },
             Stmt::Continue { span } => StatementInstruction::Continue { span: *span },
             Stmt::Expression { expression, span } => StatementInstruction::Expression {
-                expression: self.compile_expr(expression),
+                expression: self.compile_expr_with_context(expression, None, current_return),
                 span: *span,
             },
         }
     }
 
-    fn compile_expr(&self, expr: &Expr) -> ByteExpr {
-        self.compile_expr_with_expected(expr, None)
-    }
-
-    fn compile_expr_with_expected(&self, expr: &Expr, expected: Option<&Type>) -> ByteExpr {
+    fn compile_expr_with_context(
+        &self,
+        expr: &Expr,
+        expected: Option<&Type>,
+        current_return: Option<&Type>,
+    ) -> ByteExpr {
         let kind = match &expr.kind {
             ExprKind::Literal(value) => ByteExprKind::Constant(value.clone()),
             ExprKind::Variable(name) if name == "none" => {
@@ -834,22 +1165,108 @@ impl Compiler {
             ExprKind::Variable(name) => ByteExprKind::Get(name.clone()),
             ExprKind::Assign { name, value } => ByteExprKind::Assign {
                 name: name.clone(),
-                value: Box::new(self.compile_expr(value)),
+                value: Box::new(self.compile_expr_with_context(value, None, current_return)),
             },
             ExprKind::Unary { op, right } => ByteExprKind::Unary {
                 op: *op,
-                right: Box::new(self.compile_expr(right)),
+                right: Box::new(self.compile_expr_with_context(right, None, current_return)),
             },
             ExprKind::Binary { left, op, right } => ByteExprKind::Binary {
-                left: Box::new(self.compile_expr(left)),
+                left: Box::new(self.compile_expr_with_context(left, None, current_return)),
                 op: *op,
-                right: Box::new(self.compile_expr(right)),
+                right: Box::new(self.compile_expr_with_context(right, None, current_return)),
+            },
+            ExprKind::StringInterpolation(parts) => ByteExprKind::StringInterpolation {
+                parts: parts
+                    .iter()
+                    .map(|part| self.compile_string_interpolation_part(part, current_return))
+                    .collect(),
+            },
+            ExprKind::Question { value } => ByteExprKind::Question {
+                value: Box::new(self.compile_expr_with_context(value, None, current_return)),
+                return_type: current_return.cloned().unwrap_or(Type::Null),
             },
             ExprKind::Call { callee, args, .. } => {
-                if let (ExprKind::Variable(name), [value]) = (&callee.kind, args.as_slice()) {
+                if let ExprKind::Field { receiver, name, .. } = &callee.kind {
+                    if let (ExprKind::Variable(enum_name), [payload]) =
+                        (&receiver.kind, args.as_slice())
+                    {
+                        if self.enum_names.contains(enum_name) {
+                            ByteExprKind::EnumVariant {
+                                enum_name: enum_name.clone(),
+                                variant_name: name.clone(),
+                                payload: Some(Box::new(self.compile_expr_with_context(
+                                    payload,
+                                    None,
+                                    current_return,
+                                ))),
+                            }
+                        } else {
+                            self.compile_record_method_call(
+                                callee,
+                                receiver,
+                                name,
+                                args,
+                                current_return,
+                            )
+                        }
+                    } else {
+                        self.compile_record_method_call(
+                            callee,
+                            receiver,
+                            name,
+                            args,
+                            current_return,
+                        )
+                    }
+                } else if let (ExprKind::Variable(name), [value]) = (&callee.kind, args.as_slice())
+                {
                     if name == "len" {
                         ByteExprKind::ArrayLen {
-                            value: Box::new(self.compile_expr(value)),
+                            value: Box::new(self.compile_expr_with_context(
+                                value,
+                                None,
+                                current_return,
+                            )),
+                        }
+                    } else if is_std_json_from_json_name(name) {
+                        let target_type = match expected {
+                            Some(Type::Result { ok, .. }) => ok.as_ref().clone(),
+                            Some(other) => other.clone(),
+                            None => Type::Json,
+                        };
+                        ByteExprKind::JsonDecode {
+                            value: Box::new(self.compile_expr_with_context(
+                                value,
+                                None,
+                                current_return,
+                            )),
+                            target_type,
+                            schema: self.json_decode_schema.clone(),
+                        }
+                    } else if name == "map_keys" {
+                        ByteExprKind::MapKeys {
+                            map: Box::new(self.compile_expr_with_context(
+                                value,
+                                None,
+                                current_return,
+                            )),
+                        }
+                    } else if name == "map_values" {
+                        ByteExprKind::MapValues {
+                            map: Box::new(self.compile_expr_with_context(
+                                value,
+                                None,
+                                current_return,
+                            )),
+                        }
+                    } else if name == "map_size" {
+                        ByteExprKind::MapSize {
+                            map: Box::new(self.compile_expr_with_context(
+                                value,
+                                None,
+                                current_return,
+                            )),
                         }
                     } else if name == "some" {
                         let payload_type = match expected {
@@ -858,7 +1275,11 @@ impl Compiler {
                         };
                         ByteExprKind::Some {
                             payload_type,
-                            payload: Box::new(self.compile_expr(value)),
+                            payload: Box::new(self.compile_expr_with_context(
+                                value,
+                                None,
+                                current_return,
+                            )),
                         }
                     } else if name == "ok" {
                         let (ok_type, err_type) = match expected {
@@ -870,7 +1291,11 @@ impl Compiler {
                         ByteExprKind::Ok {
                             ok_type,
                             err_type,
-                            payload: Box::new(self.compile_expr(value)),
+                            payload: Box::new(self.compile_expr_with_context(
+                                value,
+                                None,
+                                current_return,
+                            )),
                         }
                     } else if name == "err" {
                         let (ok_type, err_type) = match expected {
@@ -882,37 +1307,82 @@ impl Compiler {
                         ByteExprKind::Err {
                             ok_type,
                             err_type,
-                            payload: Box::new(self.compile_expr(value)),
+                            payload: Box::new(self.compile_expr_with_context(
+                                value,
+                                None,
+                                current_return,
+                            )),
                         }
                     } else {
                         ByteExprKind::Call {
-                            callee: Box::new(self.compile_expr(callee)),
-                            args: args.iter().map(|arg| self.compile_expr(arg)).collect(),
+                            callee: Box::new(self.compile_expr_with_context(
+                                callee,
+                                None,
+                                current_return,
+                            )),
+                            args: args
+                                .iter()
+                                .map(|arg| {
+                                    self.compile_expr_with_context(arg, None, current_return)
+                                })
+                                .collect(),
                         }
                     }
                 } else if let (ExprKind::Variable(name), [map, key]) =
                     (&callee.kind, args.as_slice())
                 {
-                    if name == "contains" {
+                    if name == "contains" || name == "map_has" {
                         ByteExprKind::MapContains {
-                            map: Box::new(self.compile_expr(map)),
-                            key: Box::new(self.compile_expr(key)),
+                            map: Box::new(self.compile_expr_with_context(
+                                map,
+                                None,
+                                current_return,
+                            )),
+                            key: Box::new(self.compile_expr_with_context(
+                                key,
+                                None,
+                                current_return,
+                            )),
                         }
                     } else if name == "map_get" {
                         ByteExprKind::MapGet {
-                            map: Box::new(self.compile_expr(map)),
-                            key: Box::new(self.compile_expr(key)),
+                            map: Box::new(self.compile_expr_with_context(
+                                map,
+                                None,
+                                current_return,
+                            )),
+                            key: Box::new(self.compile_expr_with_context(
+                                key,
+                                None,
+                                current_return,
+                            )),
                         }
                     } else {
                         ByteExprKind::Call {
-                            callee: Box::new(self.compile_expr(callee)),
-                            args: args.iter().map(|arg| self.compile_expr(arg)).collect(),
+                            callee: Box::new(self.compile_expr_with_context(
+                                callee,
+                                None,
+                                current_return,
+                            )),
+                            args: args
+                                .iter()
+                                .map(|arg| {
+                                    self.compile_expr_with_context(arg, None, current_return)
+                                })
+                                .collect(),
                         }
                     }
                 } else {
                     ByteExprKind::Call {
-                        callee: Box::new(self.compile_expr(callee)),
-                        args: args.iter().map(|arg| self.compile_expr(arg)).collect(),
+                        callee: Box::new(self.compile_expr_with_context(
+                            callee,
+                            None,
+                            current_return,
+                        )),
+                        args: args
+                            .iter()
+                            .map(|arg| self.compile_expr_with_context(arg, None, current_return))
+                            .collect(),
                     }
                 }
             }
@@ -925,7 +1395,29 @@ impl Compiler {
                     element_type,
                     elements: elements
                         .iter()
-                        .map(|element| self.compile_expr(element))
+                        .map(|element| match element {
+                            ArrayElement::Expr(value) => ByteArrayElement::Expr(
+                                self.compile_expr_with_context(value, None, current_return),
+                            ),
+                            ArrayElement::Spread(value) => ByteArrayElement::Spread(
+                                self.compile_expr_with_context(value, None, current_return),
+                            ),
+                        })
+                        .collect(),
+                }
+            }
+            ExprKind::TupleLiteral { elements } => {
+                let element_types = match expected {
+                    Some(Type::Tuple(elements)) => elements.clone(),
+                    _ => vec![Type::Null; elements.len()],
+                };
+                ByteExprKind::TupleLiteral {
+                    element_types,
+                    elements: elements
+                        .iter()
+                        .map(|element| {
+                            self.compile_expr_with_context(element, None, current_return)
+                        })
                         .collect(),
                 }
             }
@@ -938,7 +1430,15 @@ impl Compiler {
                     value_type,
                     entries: entries
                         .iter()
-                        .map(|(key, value)| (self.compile_expr(key), self.compile_expr(value)))
+                        .map(|entry| match entry {
+                            MapEntry::Entry { key, value } => ByteMapEntry::Entry {
+                                key: self.compile_expr_with_context(key, None, current_return),
+                                value: self.compile_expr_with_context(value, None, current_return),
+                            },
+                            MapEntry::Spread(value) => ByteMapEntry::Spread(
+                                self.compile_expr_with_context(value, None, current_return),
+                            ),
+                        })
                         .collect(),
                 }
             }
@@ -946,17 +1446,72 @@ impl Compiler {
                 name: name.clone(),
                 fields: fields
                     .iter()
-                    .map(|(field, value, _)| (field.clone(), self.compile_expr(value)))
+                    .map(|(field, value, _)| {
+                        (
+                            field.clone(),
+                            self.compile_expr_with_context(value, None, current_return),
+                        )
+                    })
                     .collect(),
             },
             ExprKind::Index { array, index } => ByteExprKind::Index {
-                array: Box::new(self.compile_expr(array)),
-                index: Box::new(self.compile_expr(index)),
+                array: Box::new(self.compile_expr_with_context(array, None, current_return)),
+                index: Box::new(self.compile_expr_with_context(index, None, current_return)),
             },
-            ExprKind::Field { receiver, name, .. } => ByteExprKind::Field {
-                receiver: Box::new(self.compile_expr(receiver)),
-                name: name.clone(),
+            ExprKind::IndexAssign {
+                container,
+                index,
+                value,
+            } => ByteExprKind::IndexAssign {
+                container: Box::new(self.compile_expr_with_context(
+                    container,
+                    None,
+                    current_return,
+                )),
+                index: Box::new(self.compile_expr_with_context(index, None, current_return)),
+                value: Box::new(self.compile_expr_with_context(value, None, current_return)),
             },
+            ExprKind::FunctionLiteral {
+                params,
+                return_type,
+                body,
+            } => {
+                let body_module = self.compile_statements_with_return(body, Some(return_type));
+                ByteExprKind::FunctionLiteral {
+                    params: params.clone(),
+                    return_type: return_type.clone(),
+                    body: body_module,
+                }
+            }
+            ExprKind::Field { receiver, name, .. } => {
+                if let ExprKind::Variable(enum_name) = &receiver.kind {
+                    if self.enum_names.contains(enum_name) {
+                        ByteExprKind::EnumVariant {
+                            enum_name: enum_name.clone(),
+                            variant_name: name.clone(),
+                            payload: None,
+                        }
+                    } else {
+                        ByteExprKind::Field {
+                            receiver: Box::new(self.compile_expr_with_context(
+                                receiver,
+                                None,
+                                current_return,
+                            )),
+                            name: name.clone(),
+                        }
+                    }
+                } else {
+                    ByteExprKind::Field {
+                        receiver: Box::new(self.compile_expr_with_context(
+                            receiver,
+                            None,
+                            current_return,
+                        )),
+                        name: name.clone(),
+                    }
+                }
+            }
         };
         ByteExpr {
             kind,
@@ -964,21 +1519,94 @@ impl Compiler {
         }
     }
 
+    fn compile_string_interpolation_part(
+        &self,
+        part: &StringInterpolationPart,
+        current_return: Option<&Type>,
+    ) -> ByteStringInterpolationPart {
+        ByteStringInterpolationPart {
+            text: part.text.clone(),
+            expression: part
+                .expression
+                .as_ref()
+                .map(|expression| self.compile_expr_with_context(expression, None, current_return)),
+        }
+    }
+
+    fn compile_record_method_call(
+        &self,
+        callee: &Expr,
+        receiver: &Expr,
+        name: &str,
+        args: &[Expr],
+        current_return: Option<&Type>,
+    ) -> ByteExprKind {
+        let mut method_args = Vec::with_capacity(args.len() + 1);
+        method_args.push(self.compile_expr_with_context(receiver, None, current_return));
+        method_args.extend(
+            args.iter()
+                .map(|arg| self.compile_expr_with_context(arg, None, current_return)),
+        );
+        ByteExprKind::Call {
+            callee: Box::new(ByteExpr {
+                kind: ByteExprKind::Get(name.to_string()),
+                span: callee.span,
+            }),
+            args: method_args,
+        }
+    }
+
+    fn emit_binding_target(
+        target: &crate::BindingTarget,
+        span: Span,
+        instructions: &mut Vec<Instruction>,
+    ) {
+        match target {
+            crate::BindingTarget::Name { name, .. } => {
+                instructions.push(Instruction::Define {
+                    name: name.clone(),
+                    span,
+                });
+            }
+            crate::BindingTarget::Tuple { names, .. } => {
+                for (index, name) in names.iter().enumerate() {
+                    instructions.push(Instruction::TupleElement { index, span });
+                    instructions.push(Instruction::Define {
+                        name: name.clone(),
+                        span,
+                    });
+                }
+                instructions.push(Instruction::Pop { span });
+            }
+            crate::BindingTarget::Record { names, .. } => {
+                for name in names {
+                    instructions.push(Instruction::RecordElement {
+                        name: name.clone(),
+                        span,
+                    });
+                    instructions.push(Instruction::Define {
+                        name: name.clone(),
+                        span,
+                    });
+                }
+                instructions.push(Instruction::Pop { span });
+            }
+        }
+    }
+
     fn emit_statement(statement: &StatementInstruction, instructions: &mut Vec<Instruction>) {
         match statement {
             StatementInstruction::Let {
-                name,
+                target,
                 initializer,
                 span,
             } => {
                 Self::emit_expr(initializer, instructions);
-                instructions.push(Instruction::Define {
-                    name: name.clone(),
-                    span: *span,
-                });
+                Self::emit_binding_target(target, *span, instructions);
             }
             StatementInstruction::Function {
                 name,
+                type_params,
                 params,
                 return_type,
                 body,
@@ -986,6 +1614,7 @@ impl Compiler {
             } => {
                 instructions.push(Instruction::Function {
                     name: name.clone(),
+                    type_params: type_params.clone(),
                     params: params.clone(),
                     return_type: return_type.clone(),
                     body: body.clone(),
@@ -996,7 +1625,9 @@ impl Compiler {
                     span: *span,
                 });
             }
-            StatementInstruction::Record { .. } => {}
+            StatementInstruction::Record { .. }
+            | StatementInstruction::TypeAlias { .. }
+            | StatementInstruction::Enum { .. } => {}
             StatementInstruction::Return { value, span } => {
                 Self::emit_expr(value, instructions);
                 instructions.push(Instruction::Return { span: *span });
@@ -1035,6 +1666,50 @@ impl Compiler {
                     *target = end;
                 }
             }
+            StatementInstruction::IfLet {
+                pattern,
+                value,
+                then_body,
+                else_body,
+                span,
+            } => {
+                let temp_name = format!("$if_let${}", span.start);
+                instructions.push(Instruction::BeginScope { span: *span });
+                Self::emit_expr(value, instructions);
+                instructions.push(Instruction::Define {
+                    name: temp_name.clone(),
+                    span: *span,
+                });
+                Self::emit_match_case_condition(&temp_name, pattern, *span, instructions);
+                let jump_if_false_index = instructions.len();
+                instructions.push(Instruction::JumpIfFalse {
+                    target: usize::MAX,
+                    span: *span,
+                });
+                instructions.push(Instruction::BeginScope { span: *span });
+                Self::emit_match_case_payload_binding(&temp_name, pattern, *span, instructions);
+                Self::emit_child_instructions(then_body, instructions);
+                instructions.push(Instruction::EndScope { span: *span });
+                let jump_index = instructions.len();
+                instructions.push(Instruction::Jump {
+                    target: usize::MAX,
+                    span: *span,
+                });
+                let else_start = instructions.len();
+                instructions.push(Instruction::BeginScope { span: *span });
+                Self::emit_child_instructions(else_body, instructions);
+                instructions.push(Instruction::EndScope { span: *span });
+                let end = instructions.len();
+                if let Instruction::JumpIfFalse { target, .. } =
+                    &mut instructions[jump_if_false_index]
+                {
+                    *target = else_start;
+                }
+                if let Instruction::Jump { target, .. } = &mut instructions[jump_index] {
+                    *target = end;
+                }
+                instructions.push(Instruction::EndScope { span: *span });
+            }
             StatementInstruction::Match {
                 value,
                 cases,
@@ -1053,7 +1728,7 @@ impl Compiler {
                 for case in cases {
                     Self::emit_match_case_condition(
                         &temp_name,
-                        &case.value,
+                        &case.pattern,
                         case.span,
                         instructions,
                     );
@@ -1065,7 +1740,7 @@ impl Compiler {
                     instructions.push(Instruction::BeginScope { span: case.span });
                     Self::emit_match_case_payload_binding(
                         &temp_name,
-                        &case.value,
+                        &case.pattern,
                         case.span,
                         instructions,
                     );
@@ -1096,6 +1771,43 @@ impl Compiler {
                 }
                 instructions.push(Instruction::EndScope { span: *span });
             }
+            StatementInstruction::LetElse {
+                pattern,
+                value,
+                else_body,
+                span,
+            } => {
+                let temp_name = format!("$let_else${}", span.start);
+                Self::emit_expr(value, instructions);
+                instructions.push(Instruction::Define {
+                    name: temp_name.clone(),
+                    span: *span,
+                });
+                Self::emit_match_case_condition(&temp_name, pattern, *span, instructions);
+                let else_jump_index = instructions.len();
+                instructions.push(Instruction::JumpIfFalse {
+                    target: usize::MAX,
+                    span: *span,
+                });
+                Self::emit_match_case_payload_binding(&temp_name, pattern, *span, instructions);
+                let end_jump_index = instructions.len();
+                instructions.push(Instruction::Jump {
+                    target: usize::MAX,
+                    span: *span,
+                });
+                let else_start = instructions.len();
+                instructions.push(Instruction::BeginScope { span: *span });
+                Self::emit_child_instructions(else_body, instructions);
+                instructions.push(Instruction::EndScope { span: *span });
+                let end = instructions.len();
+                if let Instruction::JumpIfFalse { target, .. } = &mut instructions[else_jump_index]
+                {
+                    *target = else_start;
+                }
+                if let Instruction::Jump { target, .. } = &mut instructions[end_jump_index] {
+                    *target = end;
+                }
+            }
             StatementInstruction::While {
                 condition,
                 body,
@@ -1122,6 +1834,52 @@ impl Compiler {
                     *target = end;
                 }
                 Self::patch_loop_placeholders(instructions, body_start, end, loop_start, end);
+            }
+            StatementInstruction::WhileLet {
+                pattern,
+                value,
+                body,
+                span,
+            } => {
+                let temp_name = format!("$while_let${}", span.start);
+                let loop_start = instructions.len();
+                let condition_scope_start = instructions.len();
+                instructions.push(Instruction::BeginScope { span: *span });
+                Self::emit_expr(value, instructions);
+                instructions.push(Instruction::Define {
+                    name: temp_name.clone(),
+                    span: *span,
+                });
+                Self::emit_match_case_condition(&temp_name, pattern, *span, instructions);
+                let exit_jump_index = instructions.len();
+                instructions.push(Instruction::JumpIfFalse {
+                    target: usize::MAX,
+                    span: *span,
+                });
+                instructions.push(Instruction::BeginScope { span: *span });
+                Self::emit_match_case_payload_binding(&temp_name, pattern, *span, instructions);
+                Self::emit_child_instructions(body, instructions);
+                instructions.push(Instruction::EndScope { span: *span });
+                let condition_scope_end = instructions.len();
+                instructions.push(Instruction::EndScope { span: *span });
+                instructions.push(Instruction::Loop {
+                    target: loop_start,
+                    span: *span,
+                });
+                let false_exit = instructions.len();
+                instructions.push(Instruction::EndScope { span: *span });
+                let end = instructions.len();
+                if let Instruction::JumpIfFalse { target, .. } = &mut instructions[exit_jump_index]
+                {
+                    *target = false_exit;
+                }
+                Self::patch_loop_placeholders(
+                    instructions,
+                    condition_scope_start,
+                    condition_scope_end,
+                    loop_start,
+                    end,
+                );
             }
             StatementInstruction::For {
                 name,
@@ -1211,7 +1969,7 @@ impl Compiler {
 
     fn emit_match_case_condition(
         temp_name: &str,
-        value: &MatchCaseValue,
+        pattern: &MatchCaseValue,
         span: Span,
         instructions: &mut Vec<Instruction>,
     ) {
@@ -1219,62 +1977,87 @@ impl Compiler {
             name: temp_name.to_string(),
             span,
         });
-        match value {
-            MatchCaseValue::Int(_) | MatchCaseValue::Str(_) => {
-                instructions.push(Instruction::Constant {
-                    value: match_case_value(value),
-                    span,
-                });
-                instructions.push(Instruction::Binary {
-                    op: BinaryOp::Equal,
-                    span,
-                });
-            }
-            MatchCaseValue::Some(_) => {
-                instructions.push(Instruction::OptionIsSome { span });
-            }
-            MatchCaseValue::None => {
-                instructions.push(Instruction::OptionIsSome { span });
-                instructions.push(Instruction::Unary {
-                    op: UnaryOp::Not,
-                    span,
-                });
-            }
-            MatchCaseValue::Ok(_) => {
-                instructions.push(Instruction::ResultIsOk { span });
-            }
-            MatchCaseValue::Err(_) => {
-                instructions.push(Instruction::ResultIsOk { span });
-                instructions.push(Instruction::Unary {
-                    op: UnaryOp::Not,
-                    span,
-                });
-            }
-        }
+        instructions.push(Instruction::MatchPattern {
+            pattern: pattern.clone(),
+            span,
+        });
     }
 
     fn emit_match_case_payload_binding(
         temp_name: &str,
-        value: &MatchCaseValue,
+        pattern: &MatchCaseValue,
         span: Span,
         instructions: &mut Vec<Instruction>,
     ) {
-        let (name, payload_instruction) = match value {
-            MatchCaseValue::Some(name) => (name, Instruction::OptionPayload { span }),
-            MatchCaseValue::Ok(name) | MatchCaseValue::Err(name) => {
-                (name, Instruction::ResultPayload { span })
+        Self::emit_match_pattern_binding(temp_name, pattern, span, instructions);
+    }
+
+    fn emit_match_pattern_binding(
+        source_name: &str,
+        pattern: &MatchCaseValue,
+        span: Span,
+        instructions: &mut Vec<Instruction>,
+    ) {
+        match pattern {
+            MatchCaseValue::Bind(name) => {
+                instructions.push(Instruction::Load {
+                    name: source_name.to_string(),
+                    span,
+                });
+                instructions.push(Instruction::Define {
+                    name: name.clone(),
+                    span,
+                });
             }
-            MatchCaseValue::Int(_) | MatchCaseValue::Str(_) | MatchCaseValue::None => return,
-        };
-        instructions.push(Instruction::Load {
-            name: temp_name.to_string(),
-            span,
-        });
-        instructions.push(payload_instruction);
-        instructions.push(Instruction::Define {
-            name: name.clone(),
-            span,
-        });
+            MatchCaseValue::Some(inner) => {
+                let payload_name = format!("$match_payload${}${}", span.start, instructions.len());
+                instructions.push(Instruction::Load {
+                    name: source_name.to_string(),
+                    span,
+                });
+                instructions.push(Instruction::OptionPayload { span });
+                instructions.push(Instruction::Define {
+                    name: payload_name.clone(),
+                    span,
+                });
+                Self::emit_match_pattern_binding(&payload_name, inner, span, instructions);
+            }
+            MatchCaseValue::Ok(inner) | MatchCaseValue::Err(inner) => {
+                let payload_name = format!("$match_payload${}${}", span.start, instructions.len());
+                instructions.push(Instruction::Load {
+                    name: source_name.to_string(),
+                    span,
+                });
+                instructions.push(Instruction::ResultPayload { span });
+                instructions.push(Instruction::Define {
+                    name: payload_name.clone(),
+                    span,
+                });
+                Self::emit_match_pattern_binding(&payload_name, inner, span, instructions);
+            }
+            MatchCaseValue::EnumVariant {
+                payload: Some(inner),
+                ..
+            } => {
+                let payload_name = format!("$match_payload${}${}", span.start, instructions.len());
+                instructions.push(Instruction::Load {
+                    name: source_name.to_string(),
+                    span,
+                });
+                instructions.push(Instruction::EnumPayload { span });
+                instructions.push(Instruction::Define {
+                    name: payload_name.clone(),
+                    span,
+                });
+                Self::emit_match_pattern_binding(&payload_name, inner, span, instructions);
+            }
+            MatchCaseValue::Int(_)
+            | MatchCaseValue::Float(_)
+            | MatchCaseValue::Str(_)
+            | MatchCaseValue::IntRange { .. }
+            | MatchCaseValue::None
+            | MatchCaseValue::EnumVariant { payload: None, .. } => {}
+        }
     }
 
     fn emit_expr(expr: &ByteExpr, instructions: &mut Vec<Instruction>) {
@@ -1313,6 +2096,33 @@ impl Compiler {
                     });
                 }
             }
+            ByteExprKind::StringInterpolation { parts } => {
+                for part in parts {
+                    if let Some(expression) = &part.expression {
+                        Self::emit_expr(expression, instructions);
+                    }
+                }
+                instructions.push(Instruction::StringInterpolate {
+                    parts: parts
+                        .iter()
+                        .map(|part| {
+                            if part.expression.is_some() {
+                                StringInterpolationInstructionPart::Expression
+                            } else {
+                                StringInterpolationInstructionPart::Text(part.text.clone())
+                            }
+                        })
+                        .collect(),
+                    span: expr.span,
+                });
+            }
+            ByteExprKind::Question { value, return_type } => {
+                Self::emit_expr(value, instructions);
+                instructions.push(Instruction::Question {
+                    return_type: return_type.clone(),
+                    span: expr.span,
+                });
+            }
             ByteExprKind::Call { callee, args } => {
                 Self::emit_expr(callee, instructions);
                 for arg in args {
@@ -1323,15 +2133,50 @@ impl Compiler {
                     span: expr.span,
                 });
             }
+            ByteExprKind::JsonDecode {
+                value,
+                target_type,
+                schema,
+            } => {
+                Self::emit_expr(value, instructions);
+                instructions.push(Instruction::JsonDecode {
+                    target_type: target_type.clone(),
+                    schema: schema.clone(),
+                    span: expr.span,
+                });
+            }
             ByteExprKind::ArrayLiteral {
                 element_type,
                 elements,
             } => {
                 for element in elements {
-                    Self::emit_expr(element, instructions);
+                    match element {
+                        ByteArrayElement::Expr(value) | ByteArrayElement::Spread(value) => {
+                            Self::emit_expr(value, instructions);
+                        }
+                    }
                 }
                 instructions.push(Instruction::Array {
                     element_type: element_type.clone(),
+                    elements: elements
+                        .iter()
+                        .map(|element| match element {
+                            ByteArrayElement::Expr(_) => ArrayInstructionElement::Expr,
+                            ByteArrayElement::Spread(_) => ArrayInstructionElement::Spread,
+                        })
+                        .collect(),
+                    span: expr.span,
+                });
+            }
+            ByteExprKind::TupleLiteral {
+                element_types,
+                elements,
+            } => {
+                for element in elements {
+                    Self::emit_expr(element, instructions);
+                }
+                instructions.push(Instruction::Tuple {
+                    element_types: element_types.clone(),
                     element_count: elements.len(),
                     span: expr.span,
                 });
@@ -1340,13 +2185,24 @@ impl Compiler {
                 value_type,
                 entries,
             } => {
-                for (key, value) in entries {
-                    Self::emit_expr(key, instructions);
-                    Self::emit_expr(value, instructions);
+                for entry in entries {
+                    match entry {
+                        ByteMapEntry::Entry { key, value } => {
+                            Self::emit_expr(key, instructions);
+                            Self::emit_expr(value, instructions);
+                        }
+                        ByteMapEntry::Spread(value) => Self::emit_expr(value, instructions),
+                    }
                 }
                 instructions.push(Instruction::Map {
                     value_type: value_type.clone(),
-                    entry_count: entries.len(),
+                    entries: entries
+                        .iter()
+                        .map(|entry| match entry {
+                            ByteMapEntry::Entry { .. } => MapInstructionEntry::Entry,
+                            ByteMapEntry::Spread(_) => MapInstructionEntry::Spread,
+                        })
+                        .collect(),
                     span: expr.span,
                 });
             }
@@ -1394,6 +2250,21 @@ impl Compiler {
                     span: expr.span,
                 });
             }
+            ByteExprKind::EnumVariant {
+                enum_name,
+                variant_name,
+                payload,
+            } => {
+                if let Some(payload) = payload {
+                    Self::emit_expr(payload, instructions);
+                }
+                instructions.push(Instruction::EnumVariant {
+                    enum_name: enum_name.clone(),
+                    variant_name: variant_name.clone(),
+                    has_payload: payload.is_some(),
+                    span: expr.span,
+                });
+            }
             ByteExprKind::RecordLiteral { name, fields } => {
                 for (_, value) in fields {
                     Self::emit_expr(value, instructions);
@@ -1408,6 +2279,30 @@ impl Compiler {
                 Self::emit_expr(array, instructions);
                 Self::emit_expr(index, instructions);
                 instructions.push(Instruction::Index { span: expr.span });
+            }
+            ByteExprKind::IndexAssign {
+                container,
+                index,
+                value,
+            } => {
+                Self::emit_expr(container, instructions);
+                Self::emit_expr(index, instructions);
+                Self::emit_expr(value, instructions);
+                instructions.push(Instruction::IndexAssign { span: expr.span });
+            }
+            ByteExprKind::FunctionLiteral {
+                params,
+                return_type,
+                body,
+            } => {
+                instructions.push(Instruction::Function {
+                    name: String::new(),
+                    type_params: Vec::new(),
+                    params: params.clone(),
+                    return_type: return_type.clone(),
+                    body: body.clone(),
+                    span: expr.span,
+                });
             }
             ByteExprKind::Field { receiver, name } => {
                 Self::emit_expr(receiver, instructions);
@@ -1424,6 +2319,18 @@ impl Compiler {
                 Self::emit_expr(map, instructions);
                 Self::emit_expr(key, instructions);
                 instructions.push(Instruction::MapContains { span: expr.span });
+            }
+            ByteExprKind::MapKeys { map } => {
+                Self::emit_expr(map, instructions);
+                instructions.push(Instruction::MapKeys { span: expr.span });
+            }
+            ByteExprKind::MapValues { map } => {
+                Self::emit_expr(map, instructions);
+                instructions.push(Instruction::MapValues { span: expr.span });
+            }
+            ByteExprKind::MapSize { map } => {
+                Self::emit_expr(map, instructions);
+                instructions.push(Instruction::MapSize { span: expr.span });
             }
             ByteExprKind::MapGet { map, key } => {
                 Self::emit_expr(map, instructions);
@@ -1567,4 +2474,8 @@ impl Compiler {
             instruction => instruction,
         }
     }
+}
+
+fn is_std_json_from_json_name(name: &str) -> bool {
+    name == "$import$std$json$nox$from_json" || name == "__nox_std_json_from_json"
 }

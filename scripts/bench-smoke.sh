@@ -79,18 +79,28 @@ run_script_case() {
     BUDGET="$budget" run_case "$name" e2e "$expected" "$NOX_BIN" run "$file"
 }
 
-# P8.4: per-case e2e budget (seconds). Baselines as of 2026-05-22 release build:
-# bench-fib ~0.17s, bench-loop ~0.33s, bench-containers ~0.025s, bench-modules ~0.019s.
-# Budgets leave 6-50x headroom for machine load / CI shared cores; raising any of these
-# requires an independent commit + CHANGELOG + ADR.
-NOX_BENCH_BUDGET_FIB=${NOX_BENCH_BUDGET_FIB:-2.0}
-NOX_BENCH_BUDGET_LOOP=${NOX_BENCH_BUDGET_LOOP:-3.0}
-NOX_BENCH_BUDGET_CONTAINERS=${NOX_BENCH_BUDGET_CONTAINERS:-1.0}
-NOX_BENCH_BUDGET_MODULES=${NOX_BENCH_BUDGET_MODULES:-1.0}
-NOX_BENCH_BUDGET_NOX_TEST=${NOX_BENCH_BUDGET_NOX_TEST:-2.0}
+# P8.4: per-case e2e budget (seconds). Baselines observed on the v0.0.3 release build:
+# bench-fib peaked at ~0.14s, bench-loop ~0.20s, bench-containers ~0.025s,
+# bench-modules ~0.019s, bench-lambda ~0.005s, host-capabilities ~0.03s,
+# nox-test ~0.09s. Budgets leave headroom for CI shared cores and machine load.
+# Tightening or raising any of these requires an independent commit + CHANGELOG + ADR.
+NOX_BENCH_BUDGET_FIB=${NOX_BENCH_BUDGET_FIB:-1.0}
+NOX_BENCH_BUDGET_LOOP=${NOX_BENCH_BUDGET_LOOP:-1.5}
+NOX_BENCH_BUDGET_CONTAINERS=${NOX_BENCH_BUDGET_CONTAINERS:-0.3}
+NOX_BENCH_BUDGET_MODULES=${NOX_BENCH_BUDGET_MODULES:-0.3}
+NOX_BENCH_BUDGET_NOX_TEST=${NOX_BENCH_BUDGET_NOX_TEST:-1.0}
+NOX_BENCH_BUDGET_LAMBDA=${NOX_BENCH_BUDGET_LAMBDA:-0.5}
+NOX_BENCH_BUDGET_HOST_CAPABILITIES=${NOX_BENCH_BUDGET_HOST_CAPABILITIES:-0.5}
 
 run_script_case recursion "$ROOT/tests/benchmarks/bench-fib.nox" fib-ok "$NOX_BENCH_BUDGET_FIB"
 run_script_case loop "$ROOT/tests/benchmarks/bench-loop.nox" loop-ok "$NOX_BENCH_BUDGET_LOOP"
 run_script_case containers "$ROOT/tests/benchmarks/bench-containers.nox" containers-ok "$NOX_BENCH_BUDGET_CONTAINERS"
 run_script_case modules "$ROOT/tests/benchmarks/bench-modules.nox" modules-ok "$NOX_BENCH_BUDGET_MODULES"
+run_script_case lambda "$ROOT/tests/benchmarks/bench-lambda.nox" lambda-ok "$NOX_BENCH_BUDGET_LAMBDA"
+run_script_case host-capabilities "$ROOT/tests/benchmarks/bench-host-capabilities.nox" host-capabilities-ok "$NOX_BENCH_BUDGET_HOST_CAPABILITIES"
 BUDGET="$NOX_BENCH_BUDGET_NOX_TEST" run_case nox-test e2e "summary: 2 tests, 2 passed, 0 failed" "$NOX_BIN" test "$ROOT/tests/fixtures/example_test.nox"
+
+if [ "${NOX_BENCH_CRITERION:-0}" = "1" ]; then
+    cargo bench -p nox_core --bench core_paths
+    cargo bench -p nox --bench runtime_capabilities
+fi

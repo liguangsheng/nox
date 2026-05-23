@@ -34,6 +34,9 @@ pub enum NoxCoreValueKind {
     Record = 8,
     Option = 9,
     Result = 10,
+    Json = 11,
+    Tuple = 12,
+    Enum = 13,
 }
 
 #[repr(C)]
@@ -193,7 +196,7 @@ pub unsafe extern "C" fn nox_core_array_len(handle: *const NoxCoreArrayHandle) -
         return 0;
     }
     let handle = &*handle;
-    handle.array.elements.len()
+    handle.array.len()
 }
 
 /// # Safety
@@ -210,7 +213,7 @@ pub unsafe extern "C" fn nox_core_array_get(
         return NoxCoreStatus::NullPointer;
     }
     let handle = &*handle;
-    let Some(value) = handle.array.elements.get(index).cloned() else {
+    let Some(value) = handle.array.get(index) else {
         return NoxCoreStatus::Error;
     };
     ptr::write(out_value, value.into());
@@ -226,7 +229,7 @@ pub unsafe extern "C" fn nox_core_map_len(handle: *const NoxCoreMapHandle) -> us
         return 0;
     }
     let handle = &*handle;
-    handle.map.entries.len()
+    handle.map.len()
 }
 
 /// # Safety
@@ -246,8 +249,8 @@ pub unsafe extern "C" fn nox_core_map_keys(
     }
     let handle = &*handle;
     let mut count = 0;
-    for key in handle.map.entries.keys().take(capacity) {
-        ptr::write(out_values.add(count), Value::string(key.clone()).into());
+    for key in handle.map.keys().into_iter().take(capacity) {
+        ptr::write(out_values.add(count), Value::string(key).into());
         count += 1;
     }
     ptr::write(written, count);
@@ -272,7 +275,7 @@ pub unsafe extern "C" fn nox_core_map_get(
         return NoxCoreStatus::InvalidUtf8;
     };
     let handle = &*handle;
-    let Some(value) = handle.map.entries.get(key).cloned() else {
+    let Some(value) = handle.map.get(key) else {
         return NoxCoreStatus::Error;
     };
     ptr::write(out_value, value.into());
@@ -378,6 +381,9 @@ impl TryFrom<NoxCoreValueKind> for ScalarType {
             NoxCoreValueKind::Int => Ok(Self::Int),
             NoxCoreValueKind::Float => Ok(Self::Float),
             NoxCoreValueKind::String
+            | NoxCoreValueKind::Json
+            | NoxCoreValueKind::Tuple
+            | NoxCoreValueKind::Enum
             | NoxCoreValueKind::Function
             | NoxCoreValueKind::Array
             | NoxCoreValueKind::Map
@@ -414,9 +420,20 @@ impl From<Value> for NoxCoreValue {
                     .into_raw(),
                 ..Self::null()
             },
+            Value::Json(value) => Self {
+                kind: NoxCoreValueKind::Json,
+                string_value: CString::new(value.to_string())
+                    .expect("serialized JSON has no interior NUL")
+                    .into_raw(),
+                ..Self::null()
+            },
             Value::Array(array) => Self {
                 kind: NoxCoreValueKind::Array,
                 array_handle: Box::into_raw(Box::new(NoxCoreArrayHandle { array })),
+                ..Self::null()
+            },
+            Value::Tuple(_) => Self {
+                kind: NoxCoreValueKind::Tuple,
                 ..Self::null()
             },
             Value::Map(map) => Self {
@@ -439,6 +456,10 @@ impl From<Value> for NoxCoreValue {
                 result_handle: Box::into_raw(Box::new(NoxCoreResultHandle { result })),
                 ..Self::null()
             },
+            Value::Enum(_) => Self {
+                kind: NoxCoreValueKind::Enum,
+                ..Self::null()
+            },
             Value::Function(_) => Self {
                 kind: NoxCoreValueKind::Function,
                 ..Self::null()
@@ -457,6 +478,9 @@ impl TryFrom<NoxCoreValue> for Value {
             NoxCoreValueKind::Int => Ok(Self::Int(value.int_value)),
             NoxCoreValueKind::Float => Ok(Self::Float(value.float_value)),
             NoxCoreValueKind::String
+            | NoxCoreValueKind::Json
+            | NoxCoreValueKind::Tuple
+            | NoxCoreValueKind::Enum
             | NoxCoreValueKind::Function
             | NoxCoreValueKind::Array
             | NoxCoreValueKind::Map
@@ -543,6 +567,83 @@ pub unsafe extern "C" fn nox_core_engine_register_host_function(
     callback: Option<NoxCoreHostCallback>,
     ctx: *mut c_void,
 ) -> NoxCoreStatus {
+    register_c_host_function(CHostRegistration {
+        engine,
+        name,
+        param_types,
+        param_count,
+        return_type,
+        callback,
+        ctx,
+        docstring: ptr::null(),
+        capabilities: ptr::null(),
+        capability_count: 0,
+    })
+}
+
+/// # Safety
+///
+/// `engine` must point to a live engine returned by `nox_core_engine_new`.
+/// `name` must point to a valid NUL-terminated UTF-8 string. If `param_count`
+/// is non-zero, `param_types` must point to `param_count` readable value-kind
+/// entries. `callback` must remain callable for as long as the registered
+/// function can be invoked by the engine. `docstring` may be null. If
+/// `capability_count` is non-zero, `capabilities` must point to
+/// `capability_count` readable NUL-terminated UTF-8 string pointers.
+#[no_mangle]
+pub unsafe extern "C" fn nox_core_engine_register_host_function_ex(
+    engine: *mut NoxCoreEngine,
+    name: *const c_char,
+    param_types: *const NoxCoreValueKind,
+    param_count: usize,
+    return_type: NoxCoreValueKind,
+    callback: Option<NoxCoreHostCallback>,
+    ctx: *mut c_void,
+    docstring: *const c_char,
+    capabilities: *const *const c_char,
+    capability_count: usize,
+) -> NoxCoreStatus {
+    register_c_host_function(CHostRegistration {
+        engine,
+        name,
+        param_types,
+        param_count,
+        return_type,
+        callback,
+        ctx,
+        docstring,
+        capabilities,
+        capability_count,
+    })
+}
+
+struct CHostRegistration {
+    engine: *mut NoxCoreEngine,
+    name: *const c_char,
+    param_types: *const NoxCoreValueKind,
+    param_count: usize,
+    return_type: NoxCoreValueKind,
+    callback: Option<NoxCoreHostCallback>,
+    ctx: *mut c_void,
+    docstring: *const c_char,
+    capabilities: *const *const c_char,
+    capability_count: usize,
+}
+
+unsafe fn register_c_host_function(registration: CHostRegistration) -> NoxCoreStatus {
+    let CHostRegistration {
+        engine,
+        name,
+        param_types,
+        param_count,
+        return_type,
+        callback,
+        ctx,
+        docstring,
+        capabilities,
+        capability_count,
+    } = registration;
+
     if engine.is_null() || name.is_null() || callback.is_none() {
         return NoxCoreStatus::NullPointer;
     }
@@ -551,11 +652,43 @@ pub unsafe extern "C" fn nox_core_engine_register_host_function(
         (*engine).set_error("param_types cannot be null when param_count is non-zero");
         return NoxCoreStatus::NullPointer;
     }
+    if capability_count > 0 && capabilities.is_null() {
+        (*engine).set_error("capabilities cannot be null when capability_count is non-zero");
+        return NoxCoreStatus::NullPointer;
+    }
 
     let Ok(name) = CStr::from_ptr(name).to_str() else {
         (*engine).set_error("host function name is not valid UTF-8");
         return NoxCoreStatus::InvalidUtf8;
     };
+    let docstring = if docstring.is_null() {
+        None
+    } else {
+        let Ok(value) = CStr::from_ptr(docstring).to_str() else {
+            (*engine).set_error("host function docstring is not valid UTF-8");
+            return NoxCoreStatus::InvalidUtf8;
+        };
+        Some(value.to_string())
+    };
+    let raw_capabilities = if capability_count == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(capabilities, capability_count)
+    };
+    let mut capability_names = Vec::with_capacity(raw_capabilities.len());
+    for (index, capability) in raw_capabilities.iter().copied().enumerate() {
+        if capability.is_null() {
+            (*engine).set_error(format!("host capability at index {index} is null"));
+            return NoxCoreStatus::NullPointer;
+        }
+        let Ok(value) = CStr::from_ptr(capability).to_str() else {
+            (*engine).set_error(format!(
+                "host capability at index {index} is not valid UTF-8"
+            ));
+            return NoxCoreStatus::InvalidUtf8;
+        };
+        capability_names.push(value.to_string());
+    }
 
     let Ok(return_type) = ScalarType::try_from(return_type) else {
         (*engine).set_error("unsupported C ABI host function return type");
@@ -576,6 +709,12 @@ pub unsafe extern "C" fn nox_core_engine_register_host_function(
             return NoxCoreStatus::Error;
         };
         builder = builder.param(format!("arg{index}"), Type::from(ty));
+    }
+    if let Some(docstring) = docstring {
+        builder = builder.docstring(docstring);
+    }
+    for capability in capability_names {
+        builder = builder.capability(capability);
     }
 
     let callback = callback.expect("checked above");

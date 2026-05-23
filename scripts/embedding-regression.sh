@@ -14,6 +14,9 @@ cargo test -p nox session_and_runtime --lib >/dev/null
 printf 'embedding regression: rust embedding example\n'
 cargo run -p nox --example rust_embedding >/dev/null
 
+printf 'embedding regression: rust embedding namespace example\n'
+cargo run -p nox --example rust_embedding_namespace >/dev/null
+
 printf 'embedding regression: build nox_core\n'
 cargo build -p nox_core >/dev/null
 

@@ -55,6 +55,25 @@ cargo run -p nox -- fmt examples/hello.nox
 cargo run -p nox -- inspect-bytecode --compact examples/hello.nox
 ```
 
+## 编辑器工具链
+
+Nox 的 TextMate grammar 位于 `tools/nox.tmLanguage.json`，VS Code 扩展位于
+`tools/vscode-nox/`。扩展贡献 `.nox` 语言、高亮、LSP 启动和 DAP debug 配置；它默认从
+`NOX_BINARY` 或 PATH 中的 `nox` 启动 `nox lsp` / `nox dap`，也可以在 VS Code 设置
+`nox.binaryPath` 指向本地构建产物。
+
+扩展 smoke 与打包命令：
+
+```sh
+npm install --prefix tools/vscode-nox
+npm run --prefix tools/vscode-nox smoke
+npm run --prefix tools/vscode-nox package
+```
+
+`package` 会生成 `.vsix`，并包含运行时依赖；安装后打开 `.nox` 文件应获得高亮、hover、
+signature help、code action、diagnostics/completion/formatting，以及 `Debug Nox script`
+启动配置。
+
 改 Rust/C embedding 表面、C ABI 或 header 时，运行 embedding regression：
 
 ```sh
@@ -158,6 +177,77 @@ diagnostics。其它退出码视为回归，尤其用于捕捉 panic。
 
 如果新 case 触发 panic，先保留最小 fixture，再修实现；不要把随机 fuzz 输出直接塞进
 corpus。
+
+## Fuzz 验证
+
+阶段 15 开始，仓库包含 `fuzz/` 下的 cargo-fuzz workspace，用于长期压力测试高风险编译路径。
+当前目标：
+
+- `parser`：`lex` + `parse_all`，覆盖语法恢复与多诊断收集。
+- `typecheck`：`lex` + `parse_all` + type checker，覆盖声明收集、别名展开、pattern 与容器类型检查。
+- `verifier`：`lex` + `parse_all` + type checker + bytecode compile + verifier，覆盖 AST 到 bytecode 后的
+  verifier 不变量。
+
+首次使用需要安装 cargo-fuzz：
+
+```sh
+cargo install cargo-fuzz
+```
+
+短 smoke：
+
+```sh
+RUSTFLAGS="--cfg fuzzing" cargo check --manifest-path fuzz/Cargo.toml
+cargo +nightly fuzz run parser -- -max_total_time=60
+cargo +nightly fuzz run typecheck -- -max_total_time=60
+cargo +nightly fuzz run verifier -- -max_total_time=60
+```
+
+`scripts/release-gate.sh` 默认不跑 fuzz，避免每次本地 release gate 变慢。需要把三项目标接入同一门禁时，使用：
+
+```sh
+NOX_RELEASE_GATE_FUZZ=1 NOX_FUZZ_TIME=60 scripts/release-gate.sh
+```
+
+property failure export 和 coverage 也作为 opt-in release-gate 分层，默认不跑，供 CI 或 release
+operator 在需要更深质量证据时显式打开：
+
+```sh
+NOX_RELEASE_GATE_PROPERTY=1 scripts/release-gate.sh
+NOX_RELEASE_GATE_COVERAGE=1 scripts/release-gate.sh
+```
+
+新增 seed corpus 时放到 `fuzz/corpus/<target>/`，优先放最小、可解释、能覆盖真实语法边界的 `.nox`
+输入。崩溃样本先最小化，再判断是否应进入 `tests/malformed/`、`tests/fixtures/` 或继续只保留在
+fuzz corpus；不要把随机大样本直接提交。
+
+## Sanitizer / Valgrind 验证
+
+阶段 15 新增 sanitizer smoke，用于在 release 前复查 heap 与 C ABI 边界：
+
+```sh
+scripts/sanitizer-smoke.sh
+```
+
+该脚本执行三类检查：
+
+- `RUSTFLAGS="-Z sanitizer=address" cargo +nightly test -p nox_core ... --target x86_64-unknown-linux-gnu`，
+  覆盖 C ABI owning handle、嵌套 heap 值释放和 option/result handle 生命周期。
+- `RUSTFLAGS="-Z sanitizer=thread" cargo +nightly test -Z build-std -p nox_core ...`，覆盖宿主
+  callback 返回值释放路径。TSan 需要 nightly `rust-src` 组件；缺失时先运行
+  `rustup component add rust-src --toolchain nightly-x86_64-unknown-linux-gnu`。
+- `valgrind --leak-check=full` 编译并运行 `examples/embed/c_embedding.c`，把 C embedding smoke 放到
+  Valgrind 下检查 definite / indirect / possible leak。
+
+脚本默认使用 `$HOME/.cargo/bin/cargo +nightly` 和 `valgrind`；需要覆盖时可设置
+`CARGO_NIGHTLY=/path/to/cargo`、`NOX_SANITIZER_TARGET=<triple>`、`VALGRIND=/path/to/valgrind`。
+`scripts/release-gate.sh` 默认不跑 sanitizer；需要接入同一门禁时使用：
+
+```sh
+NOX_RELEASE_GATE_SANITIZER=1 scripts/release-gate.sh
+```
+
+Sanitizer 报告视为真实 release blocker；先最小化输入或测试，再修实现，不要通过关闭测试绕过。
 
 ## 修改规则
 

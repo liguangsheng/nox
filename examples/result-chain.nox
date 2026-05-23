@@ -1,0 +1,35 @@
+fn read_config() -> result[str, str] {
+    return ok("nox");
+}
+
+fn maybe_port() -> option[int] {
+    return some(42);
+}
+
+fn describe_name() -> result[str, str] {
+    let name: str = read_config()?;
+    return ok(name);
+}
+
+fn describe_port() -> option[str] {
+    let port: int = maybe_port()?;
+    return some("${port}");
+}
+
+let result: result[str, str] = describe_name();
+let port: option[str] = describe_port();
+match (result) {
+    ok(name) => {
+        match (port) {
+            some(value) => {
+                "${name}:${value}";
+            }
+            none => {
+                name;
+            }
+        }
+    }
+    err(message) => {
+        message;
+    }
+}

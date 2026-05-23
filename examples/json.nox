@@ -1,0 +1,55 @@
+import "std/json.nox" as json;
+
+let parsed: result[json, str] = json.parse("{\"name\":\"nox\",\"ok\":true,\"items\":[1,null,\"x\"]}");
+
+match (parsed) {
+    ok(value) => {
+        let items_result: result[json, str] = json.object_get(value, "items");
+        let name_result: result[json, str] = json.object_get(value, "name");
+        match (items_result) {
+            ok(items) => {
+                let count: result[int, str] = json.array_len(items);
+                let first: result[json, str] = json.array_get(items, 0);
+                match (name_result) {
+                    ok(name) => {
+                        match (count) {
+                            ok(length) => {
+                                match (first) {
+                                    ok(first_value) => {
+                                        if (
+                                            json.kind(value) == "object" &&
+                                            json.kind(items) == "array" &&
+                                            json.kind(name) == "string" &&
+                                            json.stringify(first_value) == "1" &&
+                                            length == 3 &&
+                                            json.stringify(value) == "{\"items\":[1,null,\"x\"],\"name\":\"nox\",\"ok\":true}"
+                                        ) {
+                                            "json-ok";
+                                        } else {
+                                            "json-bad";
+                                        }
+                                    }
+                                    err(message) => {
+                                        message;
+                                    }
+                                }
+                            }
+                            err(message) => {
+                                message;
+                            }
+                        }
+                    }
+                    err(message) => {
+                        message;
+                    }
+                }
+            }
+            err(message) => {
+                message;
+            }
+        }
+    }
+    err(message) => {
+        message;
+    }
+}

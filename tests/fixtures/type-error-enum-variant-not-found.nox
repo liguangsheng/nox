@@ -1,0 +1,6 @@
+enum LoadState {
+    Loading,
+}
+
+let state: LoadState = LoadState.Ready(42);
+state;

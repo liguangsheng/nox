@@ -1,0 +1,33 @@
+enum LoadState {
+    Loading,
+    Ready(int),
+    Failed(str),
+}
+
+fn next(index: int) -> option[int] {
+    if (index < 3) {
+        return some(index + 1);
+    }
+    return none;
+}
+
+fn require_value(input: option[int]) -> int {
+    let some(value) = input else {
+        return 0;
+    };
+    return value;
+}
+
+let index: int = 0;
+let total: int = 0;
+while let some(value) = next(index) {
+    total = total + value;
+    index = index + 1;
+}
+
+let state: LoadState = LoadState.Ready(total + require_value(some(36)));
+if let Ready(value) = state {
+    "let-patterns:${value}";
+} else {
+    "let-patterns:missing";
+}

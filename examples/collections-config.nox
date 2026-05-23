@@ -1,0 +1,15 @@
+import "std/map.nox" as map;
+import "std/array.nox" as array;
+
+let defaults: map[str, str] = {"host": "127.0.0.1", "port": "8080", "mode": "dev"};
+let overrides: map[str, str] = {"port": "9090", "mode": "prod"};
+let merged: map[str, str] = map.merge(defaults, overrides);
+let without_mode: map[str, str] = map.remove_copy(merged, "mode");
+let keys: [str] = array.sort_copy_str(map.keys(without_mode));
+let port: str = map.get_or(without_mode, "port", "8080");
+
+if (len(keys) == 2 && keys[0] == "host" && port == "9090") {
+    "config-ok";
+} else {
+    "config-bad";
+}

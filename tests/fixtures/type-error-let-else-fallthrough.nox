@@ -1,0 +1,8 @@
+fn read(input: option[int]) -> int {
+    let some(value) = input else {
+        0;
+    };
+    return value;
+}
+
+read(some(1));

@@ -12,12 +12,47 @@ cargo run -p nox -- <command> <file.nox>
 nox run [file.nox]
 nox --version
 nox check [--json] [file.nox ...]
-nox test [--json] [file-or-dir ...]
+nox test [--json] [--filter <substr>] [--retry <N>] [--export-failures <dir>] [--export-failures-classified <dir>] [file-or-dir ...]
 nox fmt [--check | --write] <file.nox> [file.nox ...]
 nox project check
+nox repl
 nox lsp
+nox dap
+nox profile <file.nox>
+nox coverage <file.nox>
 nox inspect-bytecode [--compact] <file.nox>
+nox watch [--interval-ms <ms>] (check|test|run) [args...]
+nox lint [--json] <file.nox> [file.nox ...]
+nox doc <file.nox>
 ```
+
+## `doc`
+
+`nox doc` 输出一个 Markdown 文档，列出脚本中所有顶层 `fn`、`record`、`enum`、
+`type` 声明（export 和 local），并把每个声明前的 `///` doc comment（紧邻在
+声明上方的连续 `///` 行）作为描述。每个章节包含 `Kind:` 与 `Visibility:` 标签。
+注释中的空白后第一个空格会被吞掉以保持 Markdown 对齐。当前实现是 text-based 扫描，
+不解析完整 AST；LSP hover 集成与 `nox` 自身 stdlib 自动校验留作后续 session。
+
+## `lint`
+
+`nox lint` 报告非阻断质量提示。当前规则集：`lint.unused-variable`、
+`lint.unused-function`、`lint.unused-import`、`lint.unreachable-code`、
+`lint.shadowed-variable`、`lint.constant-condition`。扫描顶层声明（`let`、`fn`、
+`import as alias`）并对比 AST 中变量引用集合。下划线开头的标识符（如 `_ignored`）
+默认跳过 unused-variable 检查。退出码 0（即使有 warning）；`--json` 输出
+`nox.lint.v1` schema，包含 `summary.capabilities`（按导入 + 调用模式推断脚本
+所需的 runtime capability 集合，例如 `filesystem` / `filesystem_write` /
+`process_run` / `environment` / `network` / `timers` / `async_tasks`）。
+文本模式追加 `capabilities: ...` 行。
+
+## `watch`
+
+`nox watch` 包装单个 `check`/`test`/`run` 子命令，文件变化时重新触发。监视范围按
+manifest 的 `source_dirs` + `test_dirs`；没有 manifest 则使用当前目录。采用 `stat`
+轮询（默认 500ms，可用 `--interval-ms` 调整），前台运行，CTRL-C 退出。按 ADR 0022，
+不引入 daemon、增量 typecheck 缓存或 hot reload。watch 启动时监视路径不存在返回稳定
+诊断 code `watch.path-not-found`。
 
 ## `run`
 
@@ -32,7 +67,8 @@ cargo run -p nox -- run examples/hello.nox
 `[entrypoints].main` 指向的脚本。找不到 manifest 或 manifest 没有 `main` 时返回用法错误。
 显式路径始终优先于 manifest main。
 
-入口路径后面的剩余位置参数会传给脚本的 `args()`：
+入口路径后面的剩余位置参数会传给脚本的 `args()` 和 `std/process.nox` 的 `argv()`；二者都不包含
+脚本路径：
 
 ```sh
 cargo run -p nox -- run examples/args.nox alpha beta
@@ -57,6 +93,8 @@ manifest 的 `[runtime].permissions` 只声明项目期望能力，不会让 CLI
 
 `args() -> [str]` 不需要额外权限。`env_list() -> map[str, str]`、`env_get`
 和 `std/env.nox` 的 `try_get(name: str) -> option[str]` 一样受 `environment` 权限控制。
+`std/process.nox` 的 `read_stdin()` 读取完整 stdin，`print_err(value)` 向 stderr 写一行，
+`exit(code)` 接受 `0..255` 并在脚本成功结束后作为 `nox run` 的进程退出码。
 
 ## `--version`
 
@@ -66,6 +104,70 @@ nox --version
 
 `--version` 打印当前 CLI 版本，输出格式固定为 `nox X.Y.Z`。本地分发 smoke 使用它确认
 安装目录里的二进制来自当前构建。
+
+## `repl`
+
+```sh
+nox repl
+```
+
+`repl` 从 stdin 逐行读取 Nox statement 或 expression，求值后打印非 `null` 的最终值。
+会话保留前面成功输入的顶层声明，因此可以先定义变量或函数，再在后续输入中使用。
+输入 `:quit`、`:exit` 或发送 EOF 退出。
+
+## `profile` / `coverage`
+
+```sh
+nox profile tests/benchmarks/bench-fib.nox
+nox coverage tests/benchmarks/bench-fib.nox
+```
+
+`profile` 执行脚本并输出 tab-separated 报告：函数表包含 `function`、`call_count`、
+`total_us`；operation 表包含 `operation`、名称、`count`、`total_us`，覆盖 host
+callback、容器 literal、index、match pattern 和 map helper 等 VM 热路径。脚本函数调用通过 VM 调用路径记录，递归函数会累计真实调用次数；`<module>` 表示顶层模块执行。
+`coverage` 复用同一执行数据，输出执行过的函数行、VM span 级 statement 执行次数和 branch
+true/false 次数，适合 release 前确认入口路径、语句和分支覆盖情况。
+`--json` 输出聚合 schema（`nox.profile.v1` / `nox.coverage.v1`，含 `functions` 与
+`operations`；coverage 还会兼容新增 `statements` / `branches` 数组，包含 byte span 与
+1-based source location）；`--ndjson` 输出函数和 operation 事件 schema（`nox.profile.event.v1` /
+`nox.coverage.event.v1`），coverage 还会输出 `kind:"statement"` / `kind:"branch"` 事件，
+便于工具流式消费。
+`--json` 与 `--ndjson` 互斥。
+
+## `trace`
+
+```sh
+nox trace --ndjson script.nox
+```
+
+`trace` 输出 `nox.trace.event.v1` NDJSON 事件流，包含运行开始、静态 capability 摘要、
+逐 capability 的 `permission_check` requirement、runtime `io` / `timer` / `task`
+事件、捕获的 stdout/stderr、函数 / operation profile 行、host callback summary、
+逐调用 `host_callback_call` enter/exit 事件、diagnostic 和运行结束。每行都包含稳定
+`trace_id` 与递增 `seq`，便于 CLI/LSP 或外部工具关联一次运行的诊断与事件。diagnostic
+事件同时携带 `span`、`source`，以及运行时错误可用的 `stack_frames`。runtime `io`
+事件覆盖 stdout/stderr write、stdin read、顶层文件 helper，以及 `std/fs.nox`
+filesystem 操作。
+
+LSP publishDiagnostics 也会在每条诊断的 `data.trace_id` 中携带确定性关联 id，便于编辑器或
+外部工具把 LSP 诊断和 trace/log 记录对应起来。
+
+## `dap`
+
+```sh
+nox dap
+```
+
+`dap` 通过 stdio 提供 Debug Adapter Protocol 最小子集，使用 `Content-Length` frame。
+当前支持 `initialize`、`setBreakpoints`（含 condition metadata 与最小条件求值）、
+`setExceptionBreakpoints`、`launch`、`configurationDone`、`threads`、`stackTrace`、
+`scopes`、`variables`、`continue`、`next` 和 `disconnect`。VS Code 扩展会通过同一个
+`nox` binary 启动该 adapter。
+条件断点当前支持 launch 求值后的 `result == value` / `result != value` 判断；条件不匹配时不会伪造
+breakpoint stop。开启 `raised` exception filter 后，launch 阶段 runtime error 会发布
+`reason:"exception"` 的 stopped event。
+`variables` request 支持可选 `depth` / `maxDepth` 参数：`0` 表示不返回可展开子引用，
+更大值会暴露受深度限制的 `debugState` 子变量，并可查看 condition / exception 调试状态。
 
 ## `check`
 
@@ -143,6 +245,8 @@ cargo run -p nox -- check --json tests/fixtures/type-error.nox
 - `message`：面向人的错误说明。
 - `span`：源码 byte offset 范围。
 - `source`：文件名、1-based line 和 1-based column。
+- `stack_frames`：可选；运行时诊断经过脚本函数调用栈传播时出现。每个 frame 包含
+  `name`、`span` 和可选 `source`，顺序为最近的调用帧在前。
 
 `files[]` 元素字段：
 
@@ -199,17 +303,38 @@ cargo run -p nox -- test --json tests
 
 - `schema`：固定为 `"nox.test.v1"`。
 - `ok`：所有测试通过时为 `true`。
-- `tests`：每个测试一条记录，包含 `file`、`name`、`ok` 和 `diagnostic`。
+- `tests`：每个测试一条记录，包含 `file`、`name`、`ok`、`attempts`、`retried`、
+  `duration_us`、`stdout`、`stderr`、`diagnostic`、`snapshot_diff`、`kind` 和
+  `mock_events`。
+- `suites`：按测试文件分组的 suite/case hierarchy，当前每个 suite 使用 `file`
+  作为标识，`cases` 列出该文件内进入本次报告的测试名。
 - `summary`：`tests`、`passed`、`failed` 计数。
 
 示例：
 
 ```json
-{"schema":"nox.test.v1","ok":false,"tests":[{"file":"tests/math_test.nox","name":"test_add","ok":true,"diagnostic":null},{"file":"tests/math_test.nox","name":"test_division","ok":false,"diagnostic":{"code":"runtime.division-by-zero","message":"division by zero","span":{"start":48,"end":53},"source":{"name":"tests/math_test.nox","line":2,"column":22}}}],"summary":{"tests":2,"passed":1,"failed":1}}
+{"schema":"nox.test.v1","ok":false,"tests":[{"file":"tests/math_test.nox","name":"test_add","ok":true,"attempts":1,"retried":false,"duration_us":120,"stdout":"setup\n","stderr":"","diagnostic":null},{"file":"tests/math_test.nox","name":"test_division","ok":false,"attempts":1,"retried":false,"duration_us":95,"stdout":"","stderr":"","diagnostic":{"code":"runtime.division-by-zero","message":"division by zero","span":{"start":48,"end":53},"source":{"name":"tests/math_test.nox","line":2,"column":22},"stack_frames":[{"name":"test_division","span":{"start":0,"end":42},"source":{"name":"tests/math_test.nox","line":1,"column":1}}]}}],"summary":{"tests":2,"passed":1,"failed":1}}
 ```
 
 `--json` 模式下，测试结果写到 stdout；测试失败的诊断嵌入 JSON，不额外写 stderr。
-语法、类型检查或测试签名错误会作为 `<module>` 失败记录输出。
+测试脚本中的 `print(...)` 和 `std/process.nox` `print_err(...)` 会按 case 捕获到
+对应记录的 `stdout` / `stderr` 字段，不污染 JSON 外层 stdout/stderr。语法、类型检查或测试签名错误会作为 `<module>` 失败记录输出。
+`kind` 把测试记录分类为 `unit`、`integration` 或 `fixture`：路径组件包含
+`fixtures` 的文件报告为 `fixture`，位于 `tests` 下的文件报告为 `integration`，
+其他 test file 报告为 `unit`。
+`std/test.nox` 的 `assert_snapshot` 失败时，记录会额外带
+`snapshot_diff: {label, actual, expected}`；其他测试为 `null`。
+`mock_events` 是为 mock capability harness 预留的兼容新增数组；普通 CLI runner
+当前输出空数组。
+`--export-failures <dir>` 是 opt-in fuzz bridge：当失败诊断包含 `std/test.nox`
+property replay metadata 时，runner 会把原始测试源码和 source/test/diagnostic
+注释写成 `.nox` corpus 文件放到 `<dir>`。根据用途可把目录指向 `fuzz/corpus/...`
+或 `tests/malformed/...`，分别服务 cargo-fuzz 或确定性坏输入回归。
+`--export-failures-classified <dir>` 保持 `--export-failures` 的兼容行为，同时把可导出
+失败写到 `<dir>/<classification>/`：property replay 失败进入 `property`，模块级坏输入
+按 diagnostic code 分到 `parser`、`typecheck`、`verifier` 或 `runtime`。
+`diagnostic.stack_frames` 是兼容新增字段，只在运行时错误跨脚本函数调用传播时出现；旧 consumer
+可以忽略该字段。
 
 ## `fmt`
 
@@ -272,8 +397,8 @@ cargo run -p nox -- project check --json
 
 `project check` 不做包管理、不安装依赖，也不授予额外 runtime permissions。默认输出是
 人类可读的本地验证日志；`--json` 输出 `nox.project-check.v1`，包含 manifest root、
-package name/version、三个子步骤的退出码以及被捕获的 stdout/stderr，便于 CI 判断项目发现
-边界和失败步骤。任一子步骤失败时，
+package name/version、manifest schema 校验摘要、入口点、manifest 声明的 runtime capability、
+模块图、三个子步骤的退出码以及被捕获的 stdout/stderr，便于 CI 判断项目发现边界、能力边界和失败步骤。任一子步骤失败时，
 命令返回非零；用法错误或缺少 manifest 返回 `2`。
 
 `nox.project-check.v1` 的顶层结构如下：
@@ -285,6 +410,18 @@ package name/version、三个子步骤的退出码以及被捕获的 stdout/stde
   "manifest": {
     "root": "/path/to/project",
     "package": { "name": "scoreboard", "version": "0.0.3" }
+  },
+  "schema_validation": {
+    "ok": true,
+    "manifest_sections": ["package", "entrypoints", "modules", "runtime"],
+    "unknown_sections": "rejected",
+    "unknown_keys": "rejected"
+  },
+  "entrypoints": { "main": "/path/to/project/src/main.nox", "named": [] },
+  "capabilities": { "declared": ["filesystem.read"] },
+  "module_graph": {
+    "roots": ["/path/to/project/src"],
+    "files": ["/path/to/project/src/main.nox"]
   },
   "steps": [
     { "name": "check", "ok": true, "status": 0, "stdout": "...", "stderr": "" },
@@ -310,6 +447,9 @@ cargo run -p nox -- lsp
 - `textDocument/hover`
 - `textDocument/formatting`
 - `textDocument/completion`
+- `textDocument/documentSymbol`
+- `textDocument/definition`
+- `nox/testDiscovery`
 - `shutdown`
 - `exit`
 
@@ -328,6 +468,8 @@ manifest/import 规则读取。
 
 hover 使用静态类型检查结果，返回 plaintext 类型，例如 `int`、`str`、`[int]`、
 `fn(int) -> int`。
+LSP 同时读取本地进程内注册的 host function metadata，用于 completion detail、hover
+和 signature help；这些 metadata 包含签名、docstring 与声明的 capability 名称。
 
 `textDocument/formatting` 复用 `fmt` 的格式化逻辑。如果文档已经格式化，返回
 空 edit 数组；否则返回一个覆盖整个文档的 `TextEdit`。源码解析失败时返回 `null`，
@@ -340,7 +482,16 @@ hover 使用静态类型检查结果，返回 plaintext 类型，例如 `int`、
 该模块的导出表面返回成员，并复用 open-document overlay。`std/fs.nox`、`std/env.nox`
 和 `std/time.nox` 是 runtime 虚拟模块，不要求磁盘上存在对应文件。
 
-当前 LSP 不支持 workspace symbol、rename、go-to-definition、后台 watch mode 或
+`textDocument/documentSymbol` 返回当前文档顶层 `fn`、`record`、`enum`、`type`、`let` 和
+`const` 声明；`export` 前缀会被跳过。`textDocument/definition` 支持当前文档顶层声明的保守子集：
+光标位于同名标识符时返回该文档内的声明位置。当前不跨文件解析定义，也不解析局部变量作用域。
+
+`nox/testDiscovery` 是编辑器集成用的 Nox 扩展请求，参数使用
+`params.textDocument.uri`。响应为当前文档内所有顶层 `test_*` 函数的数组，每项包含
+`uri`、`name` 和 `range`。`textDocument/codeLens` 使用同一发现规则生成
+`nox.runTest` 命令入口。
+
+当前 LSP 不支持 workspace symbol、rename、跨文件 go-to-definition、后台 watch mode 或
 daemon 模式；这些 request 不在 `initialize` capability 中声明。
 
 ## `inspect-bytecode`

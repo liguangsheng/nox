@@ -1,0 +1,10 @@
+fn load() -> result[int, str] {
+    return err("missing");
+}
+
+fn mismatch() -> result[int, int] {
+    let value: int = load()?;
+    return ok(value);
+}
+
+mismatch();

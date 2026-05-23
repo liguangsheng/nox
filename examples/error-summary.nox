@@ -1,0 +1,22 @@
+import "std/option.nox" as option;
+import "std/result.nox" as result;
+import "std/array.nox" as array;
+
+let loaded: result[int, str] = err("missing config");
+let fallback: int = result.unwrap_or(loaded, 80);
+let maybe_name: option[str] = none;
+let name: str = option.unwrap_or(maybe_name, "service");
+let empty_errors: [str] = [];
+let errors: [str] = array.push_copy(empty_errors, "missing config");
+
+if (
+    result.is_err(loaded) &&
+    option.is_none(maybe_name) &&
+    fallback == 80 &&
+    name == "service" &&
+    len(errors) == 1
+) {
+    "errors-ok";
+} else {
+    "errors-bad";
+}

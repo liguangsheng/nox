@@ -3,9 +3,15 @@ members = [
     "crates/nox",
     "crates/nox_core",
 ]
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
 license = "MIT"
-version = "0.0.3"
+version = "0.0.4"
+
+[profile.release]
+codegen-units = 1
+lto = true
+strip = "symbols"

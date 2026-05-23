@@ -1,0 +1,17 @@
+import "std/time.nox" as time;
+
+let formatted: str = time.format_unix(1704067205, "%Y-%m-%d %H:%M:%S");
+let parsed: result[int, str] = time.parse_unix(formatted, "%Y-%m-%d %H:%M:%S");
+
+match (parsed) {
+    ok(ts) => {
+        if (formatted == "2024-01-01 00:00:05" && time.duration_ms(ts * 1000, ts * 1000 + 250) == 250) {
+            "time-ok";
+        } else {
+            "time-bad";
+        }
+    }
+    err(message) => {
+        message;
+    }
+}

@@ -1,7 +1,7 @@
 // P8.5 standard-library surface guardrail.
 //
 // Type-checking this file (via `nox check`) is the release-time assertion for
-// PLAN 完成定义第 12 项后半 "标准库 fs/env/time/net/async/math/string 七类最小入口".
+// PLAN 完成定义第 12 项后半 "标准库 fs/env/time/net/async/math/string/json/csv/tsv/array/map/option/result/process/path 最小入口".
 // If any public stdlib surface is silently removed or its signature changes, the
 // check step fails. The file is intentionally not executed: several entries
 // require runtime capability grants, but `nox check` only resolves names and
@@ -10,17 +10,312 @@
 import "std/fs.nox" as fs;
 import "std/env.nox" as env;
 import "std/time.nox" as time;
+import "std/string.nox" as string;
+import "std/json.nox" as json;
+import "std/csv.nox" as csv;
+import "std/tsv.nox" as tsv;
+import "std/array.nox" as array;
+import "std/map.nox" as map;
+import "std/option.nox" as option;
+import "std/result.nox" as result;
+import "std/process.nox" as process;
+import "std/path.nox" as path;
+import "std/url.nox" as url;
+import "std/http.nox" as http;
+import "std/task.nox" as task;
+import "std/test.nox" as test;
+import "std/encoding.nox" as encoding;
+import "std/dotenv.nox" as dotenv;
+import "std/ini.nox" as ini;
+import "std/toml.nox" as toml;
+import "std/term.nox" as term;
+import "std/bytes.nox" as bytes;
+import "std/random.nox" as random;
+
+record SurfaceRecord {
+    id: int,
+    name: str,
+    active: bool,
+}
+
+enum SurfaceEnum {
+    Number(int),
+    Name(str),
+    Flag(bool),
+}
+
+fn surface_record(id: int, name: str, active: bool) -> SurfaceRecord {
+    return SurfaceRecord { id: id, name: name, active: active };
+}
+
+fn surface_enum_int(value: int) -> SurfaceEnum {
+    return SurfaceEnum.Number(value);
+}
+
+fn surface_enum_str(value: str) -> SurfaceEnum {
+    return SurfaceEnum.Name(value);
+}
+
+fn surface_enum_bool(value: bool) -> SurfaceEnum {
+    return SurfaceEnum.Flag(value);
+}
+
+fn surface_record_from_json(id: json, name: json, active: json) -> result[SurfaceRecord, str] {
+    return ok(SurfaceRecord { id: 1, name: "surface", active: true });
+}
+
+fn surface_enum_from_json(value: json) -> result[SurfaceEnum, str] {
+    return ok(SurfaceEnum.Number(1));
+}
+
+fn surface_enum_property(value: SurfaceEnum) -> bool {
+    return true;
+}
 
 fn audit() -> int {
     let fs_probe: bool = fs.exists("placeholder.txt");
+    let fs_is_file_probe: bool = fs.is_file("placeholder.txt");
+    let fs_is_dir_probe: bool = fs.is_dir(".");
+    let fs_list_probe: result[[str], str] = fs.list_dir(".");
+    let fs_read_binary_probe: result[[int], str] = fs.read_binary("placeholder.bin");
+    let fs_write_binary_probe: result[null, str] = fs.write_binary("placeholder.bin", []);
+    let fs_canonicalize_probe: result[str, str] = fs.canonicalize("placeholder.bin");
     let env_probe: map[str, str] = env.list();
-    let time_probe: null = time.sleep_ms(0);
+    let time_sleep_probe: null = time.sleep_ms(0);
+    let time_now_probe: int = time.now_unix();
+    let time_now_ms_probe: int = time.now_unix_ms();
+    let time_duration_probe: int = time.duration_ms(1000, 1500);
+    let time_format_probe: str = time.format_unix(1704067205, "%Y-%m-%d %H:%M:%S");
+    let time_parse_probe: result[int, str] = time.parse_unix(time_format_probe, "%Y-%m-%d %H:%M:%S");
+    let time_duration_from_min_probe: int = time.from_minutes(1);
+    let time_duration_from_hr_probe: int = time.from_hours(1);
+    let time_to_sec_probe: int = time.to_seconds(1000);
+    let time_iso_format_probe: str = time.iso8601_format(0);
+    let time_iso_parse_probe: result[int, str] = time.iso8601_parse("1970-01-01T00:00:00Z");
+    let time_deadline_probe: int = time.deadline_ms(100);
+    let time_past_probe: bool = time.is_past_deadline_ms(0);
+    let time_add_days_probe: int = time.add_days(0, 1);
+    let time_add_months_probe: int = time.add_months(0, 1);
+    let time_year_probe: int = time.year_of(0);
+    let time_month_probe: int = time.month_of(0);
+    let time_day_probe: int = time.day_of(0);
+    let time_weekday_probe: int = time.weekday_of(0);
+    let process_run_probe: result[(int, str, str), str] = process.run("true", [], "", 1);
+    let process_run_with_probe: result[(int, str, str), str] = process.run_with("true", [], "", 1, "", []);
+    let json_to_json_probe: json = json.to_json(42);
+    let json_as_int_probe: result[int, str] = json.as_int(json_to_json_probe);
+    let json_as_float_probe: result[float, str] = json.as_float(json_to_json_probe);
+    let json_as_str_probe: result[str, str] = json.as_str(json_to_json_probe);
+    let json_as_bool_probe: result[bool, str] = json.as_bool(json_to_json_probe);
+    let json_as_array_probe: result[[json], str] = json.as_array(json_to_json_probe);
+    let json_as_object_probe: result[map[str, json], str] = json.as_object(json_to_json_probe);
+    let json_from_json_probe: result[int, str] = json.from_json(json_to_json_probe);
+    let json_variant_name_probe: result[str, str] = json.variant_name(json_to_json_probe);
+    let json_variant_payload_probe: result[json, str] = json.variant_payload(json_to_json_probe);
+    let json_decode_record_probe: result[SurfaceRecord, str] = json.decode_record3(json_to_json_probe, "", "id", "number", "name", "string", "active", "bool", surface_record_from_json);
+    let json_decode_enum_probe: result[SurfaceEnum, str] = json.decode_adjacent_enum3(json_to_json_probe, "", "Number", surface_enum_from_json, "Name", surface_enum_from_json, "Flag", surface_enum_from_json);
+    let json_defaults_probe: result[json, str] = json.apply_defaults(json_to_json_probe, json_to_json_probe);
+    let json_defaults_deep_probe: result[json, str] = json.apply_defaults_deep(json_to_json_probe, json_to_json_probe);
+    let random_int_probe: (int, int) = random.next_int(1, 0, 10);
+    let random_bool_probe: (int, bool) = random.next_bool(1);
+    let random_float_probe: (int, float) = random.next_float_unit(1);
+    let term_tty_probe: bool = term.is_tty_stdout();
+    let term_tty_err_probe: bool = term.is_tty_stderr();
+    let term_color_probe: bool = term.color_enabled();
+    let term_style_probe: str = term.style_color("x", "red");
+    let term_bold_probe: str = term.style_bold("x");
+    let term_pad_probe: str = term.pad_column("x", 4);
+    let term_select_probe: result[int, str] = term.select("pick", ["a", "b"], 0);
+    let term_progress_probe: str = term.progress(1, 10, 20);
+    let term_password_probe: result[str, str] = term.prompt_password("hidden:");
+    let bytes_utf8_probe: [int] = bytes.encode_utf8("a");
+    let bytes_decode_probe: result[str, str] = bytes.decode_utf8([97]);
+    let bytes_len_probe: int = bytes.len([97]);
+    let bytes_get_probe: result[int, str] = bytes.get([97], 0);
+    let bytes_slice_probe: result[[int], str] = bytes.slice_copy([97, 98], 0, 1);
+    let bytes_equal_probe: bool = bytes.equal([97], [97]);
+    let bytes_b64_encode_probe: str = bytes.base64_encode([97]);
+    let bytes_b64_decode_probe: result[[int], str] = bytes.base64_decode("YQ==");
+    let bytes_hex_encode_probe: str = bytes.hex_encode([97]);
+    let bytes_hex_decode_probe: result[[int], str] = bytes.hex_decode("61");
     let net_probe: bool = tcp_connect("0.0.0.0", 1);
     let async_sleep_probe: int = task_sleep_ms(0);
     let async_ready_probe: bool = task_ready(0);
     let async_cancel_probe: null = task_cancel(0);
-    let math_probe: float = sqrt(4.0);
+    let process_argv_probe: [str] = process.argv();
+    let process_stdin_probe: str = process.read_stdin();
+    let process_stderr_probe: null = process.print_err("warning");
+    let process_exit_probe: null = process.exit(0);
+    let path_join_probe: str = path.join("a", "b.txt");
+    let path_base_probe: str = path.basename(path_join_probe);
+    let path_dir_probe: str = path.dirname(path_join_probe);
+    let path_ext_probe: str = path.extension(path_join_probe);
+    let path_norm_probe: str = path.normalize("a/../b.txt");
+    let math_abs_probe: float = abs(-4.0);
+    let math_min_probe: float = min(1.0, 2.0);
+    let math_max_probe: float = max(1.0, 2.0);
+    let math_sqrt_probe: float = sqrt(4.0);
+    let math_pow_probe: float = pow(2.0, 3.0);
+    let math_floor_probe: float = floor(1.5);
+    let math_ceil_probe: float = ceil(1.5);
+    let math_round_probe: float = round(1.5);
+    let math_log_probe: float = log(e());
+    let math_log2_probe: float = log2(8.0);
+    let math_sin_probe: float = sin(0.0);
+    let math_cos_probe: float = cos(0.0);
+    let math_tan_probe: float = tan(0.0);
+    let math_pi_probe: float = pi();
+    let math_e_probe: float = e();
     let sample: str = "ok";
     let string_probe: int = len(sample);
+    let stringify_int_probe: str = to_str_int(42);
+    let stringify_float_probe: str = to_str_float(4.5);
+    let stringify_bool_probe: str = to_str_bool(true);
+    let stringify_null_probe: str = to_str_null(null);
+    let stringify_str_probe: str = to_str_str(sample);
+    let print_probe: null = print(stringify_int_probe);
+    let string_split_probe: [str] = string.split("a,b", ",");
+    let string_join_probe: str = string.join(string_split_probe, "|");
+    let string_substring_probe: str = string.substring(sample, 0, 1);
+    let string_trim_probe: str = string.trim(" ok ");
+    let string_replace_probe: str = string.replace(sample, "o", "O");
+    let string_starts_probe: bool = string.starts_with(sample, "o");
+    let string_ends_probe: bool = string.ends_with(sample, "k");
+    let string_index_probe: int = string.index_of(sample, "k");
+    let string_contains_probe: bool = string.contains(sample, "o");
+    let string_last_index_probe: int = string.last_index_of("ok-ok", "ok");
+    let string_repeat_probe: str = string.repeat("ha", 2);
+    let string_pad_left_probe: str = string.pad_left("7", 3, "0");
+    let string_pad_right_probe: str = string.pad_right("x", 3, ".");
+    let string_parse_int_probe: result[int, str] = string.parse_int("42");
+    let string_parse_float_probe: result[float, str] = string.parse_float("2.5");
+    let string_lines_probe: [str] = string.lines("a\nb");
+    let string_upper_probe: str = string.to_upper(sample);
+    let string_lower_probe: str = string.to_lower("OK");
+    let interpolation_probe: str = "sample=${sample}, len=${len(sample)}, ok=${true}";
+    let map_probe: map[str, int] = {"core": 20, "runtime": 22};
+    let map_keys_probe: [str] = map_keys(map_probe);
+    let map_values_probe: [int] = map_values(map_probe);
+    let map_has_probe: bool = map_has(map_probe, "core");
+    let map_size_probe: int = map_size(map_probe);
+    let array_len_probe: int = array.len(string_split_probe);
+    let array_empty_probe: bool = array.is_empty(string_split_probe);
+    let array_push_probe: [str] = array.push_copy(string_split_probe, "c");
+    let array_concat_probe: [str] = array.concat(string_split_probe, ["c"]);
+    let array_slice_probe: result[[str], str] = array.slice_copy(array_concat_probe, 0, 2);
+    let array_reverse_probe: [str] = array.reverse_copy(string_split_probe);
+    let array_sort_int_probe: [int] = array.sort_copy_int([2, 1]);
+    let array_sort_str_probe: [str] = array.sort_copy_str(["b", "a"]);
+    let array_set_probe: result[null, str] = array.set(array_concat_probe, 0, "z");
+    let array_append_probe: null = array.append(array_concat_probe, "extra");
+    let array_pop_probe: option[str] = array.pop(array_concat_probe);
+    let array_map_probe: [int] = array.map_fn([1, 2], fn(x: int) -> int { return x; });
+    let array_filter_probe: [int] = array.filter_fn([1, 2], fn(x: int) -> bool { return x > 0; });
+    let array_reduce_probe: int = array.reduce([1, 2], 0, fn(a: int, b: int) -> int { return a + b; });
+    let array_for_each_probe: null = array.for_each([1], fn(_: int) -> null { return null; });
+    let array_dedupe_probe: [int] = array.dedupe([1, 2, 1]);
+    let array_contains_value_probe: bool = array.contains_value([1, 2], 1);
+    let url_query_encode_probe: str = url.query_encode("a b");
+    let url_query_decode_probe: result[str, str] = url.query_decode("a%20b");
+    let url_parse_probe: result[(str, str, int, str, str), str] = url.parse("http://example.com/");
+    let url_build_probe: str = url.build("http", "example.com", 80, "/", "");
+    let http_get_probe: result[(int, str), str] = http.get("http://127.0.0.1:1/", 1);
+    let http_post_probe: result[(int, str), str] = http.post("http://127.0.0.1:1/", "", 1);
+    let http_get_binary_probe: result[(int, [int]), str] = http.get_binary("http://127.0.0.1:1/", 1);
+    let http_post_binary_probe: result[(int, [int]), str] = http.post_binary("http://127.0.0.1:1/", [], 1);
+    let task_sleep_probe: int = task.sleep_ms(0);
+    let task_is_ready_probe: bool = task.is_ready(task_sleep_probe);
+    let task_cancel_probe: null = task.cancel(task_sleep_probe);
+    let task_wait_probe: bool = task.wait(task_sleep_probe);
+    let task_wait_timeout_probe: bool = task.wait_or_timeout(task_sleep_probe, 1);
+    let task_pending_probe: int = task.pending_count();
+    test.assert_true(true, "surface-assert-true");
+    test.assert_false(false, "surface-assert-false");
+    test.assert_eq(1, 1, "surface-assert-eq");
+    test.assert_ne(1, 2, "surface-assert-ne");
+    test.assert_contains("abc", "b", "surface-assert-contains");
+    test.assert_snapshot("surface-snap", "a", "a");
+    test.assert_table_row("surface-table", 0, 1, 1);
+    let property_int_pair: (int, int) = test.gen_int(1, 0, 10);
+    let property_bool_pair: (int, bool) = test.gen_bool(1);
+    let property_string_pair: (int, str) = test.gen_string(1, 4);
+    let property_array_pair: (int, [int]) = test.gen_int_array(1, 2, 0, 10);
+    let property_map_pair: (int, map[str, int]) = test.gen_int_map(1, 2, 0, 10);
+    let property_record_pair: (int, SurfaceRecord) = test.gen_record3(1, 0, 10, surface_record);
+    let property_enum_pair: (int, SurfaceEnum) = test.gen_enum3(1, 0, 10, 4, surface_enum_int, surface_enum_str, surface_enum_bool);
+    test.assert_property_int("surface-property", 1, 4, 0, 10, fn(value: int) -> bool {
+        return value >= 0;
+    });
+    test.assert_property_int_array("surface-array-property", 1, 4, 2, 0, 10, fn(values: [int]) -> bool {
+        return len(values) == 2;
+    });
+    test.assert_property_int_map("surface-map-property", 1, 4, 2, 0, 10, fn(values: map[str, int]) -> bool {
+        return len(map.keys(values)) == 2;
+    });
+    test.assert_property_record3("surface-record-property", 1, 4, 0, 10, surface_record, fn(value: SurfaceRecord) -> bool {
+        return value.id >= 0;
+    });
+    test.assert_property_enum3("surface-enum-property", 1, 4, 0, 10, 4, surface_enum_int, surface_enum_str, surface_enum_bool, surface_enum_property);
+    let encoding_b64_probe: str = encoding.base64_encode("a");
+    let encoding_b64_decode_probe: result[str, str] = encoding.base64_decode("YQ==");
+    let encoding_hex_probe: str = encoding.hex_encode("a");
+    let encoding_hex_decode_probe: result[str, str] = encoding.hex_decode("61");
+    let dotenv_probe: result[map[str, str], str] = dotenv.parse("KEY=value");
+    let ini_probe: result[map[str, map[str, str]], str] = ini.parse("[section]\nkey=value");
+    let toml_probe: result[json, str] = toml.parse("[section]\nkey = \"value\"");
+    let map_keys_mod_probe: [str] = map.keys(map_probe);
+    let map_values_mod_probe: [int] = map.values(map_probe);
+    let map_entries_probe: [(str, int)] = map.entries(map_probe);
+    let map_merge_probe: map[str, int] = map.merge(map_probe, {"extra": 1});
+    let map_remove_probe: map[str, int] = map.remove_copy(map_merge_probe, "extra");
+    let map_get_or_probe: int = map.get_or(map_remove_probe, "missing", 0);
+    let map_set_probe: null = map.set(map_merge_probe, "new", 99);
+    let map_delete_probe: bool = map.delete(map_merge_probe, "new");
+    let option_probe: option[int] = some(1);
+    let option_none_probe: option[int] = none;
+    let option_is_some_probe: bool = option.is_some(option_probe);
+    let option_is_none_probe: bool = option.is_none(option_none_probe);
+    let option_unwrap_probe: int = option.unwrap_or(option_probe, 0);
+    let result_probe: result[int, str] = ok(1);
+    let result_err_probe_value: result[int, str] = err("bad");
+    let result_is_ok_probe: bool = result.is_ok(result_probe);
+    let result_is_err_probe: bool = result.is_err(result_err_probe_value);
+    let result_unwrap_probe: int = result.unwrap_or(result_probe, 0);
+    let result_map_err_probe: result[int, str] = result.map_err_to_str(result_probe);
+    let json_parse_probe: result[json, str] = json.parse("{\"ok\":true}");
+    let json_stringify_probe: str = "";
+    let json_kind_probe: str = "";
+    match (json_parse_probe) {
+        ok(value) => {
+            json_stringify_probe = json.stringify(value);
+            json_kind_probe = json.kind(value);
+            let json_has_probe: result[bool, str] = json.object_has(value, "ok");
+            let json_get_probe: result[json, str] = json.object_get(value, "ok");
+            let json_require_probe: result[json, str] = json.require_field(value, "ok", "any");
+            let json_validate_probe: result[null, str] = json.validate_schema(value, ["ok"]);
+            let json_validate_object_probe: result[null, str] = json.validate_object(value, ["ok"], ["ok"]);
+            json_variant_name_probe = json.variant_name(value);
+            json_variant_payload_probe = json.variant_payload(value);
+            json_defaults_probe = json.apply_defaults(value, value);
+            json_defaults_deep_probe = json.apply_defaults_deep(value, value);
+        }
+        err(message) => {
+            json_stringify_probe = message;
+        }
+    }
+    let json_array_probe: result[json, str] = json.parse("[1,2]");
+    match (json_array_probe) {
+        ok(value) => {
+            let json_len_probe: result[int, str] = json.array_len(value);
+            let json_item_probe: result[json, str] = json.array_get(value, 0);
+        }
+        err(message) => {
+            json_stringify_probe = message;
+        }
+    }
+    let csv_parse_probe: result[[str], str] = csv.parse_line("a,b");
+    let csv_format_probe: str = csv.format_row(string_split_probe);
+    let tsv_parse_probe: result[[str], str] = tsv.parse_line("a\tb");
+    let tsv_format_probe: result[str, str] = tsv.format_row(string_split_probe);
     return string_probe;
 }

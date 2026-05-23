@@ -1,0 +1,38 @@
+import "std/array.nox" as array;
+import "std/map.nox" as map;
+
+let xs: [int] = [10, 20, 30];
+array.append(xs, 40);
+xs[0] = 99;
+
+let alias: [int] = xs;
+array.append(alias, 77);
+
+print(to_str_int(array.len(xs)));
+print(to_str_int(xs[0]));
+print(to_str_int(xs[4]));
+
+let popped: option[int] = array.pop(xs);
+match (popped) {
+    some(value) => {
+        print(to_str_int(value));
+    }
+    none => {
+        print("empty");
+    }
+}
+print(to_str_int(array.len(xs)));
+
+let m: map[str, int] = {"alpha": 1, "beta": 2};
+m["gamma"] = 3;
+let removed: bool = map.delete(m, "alpha");
+
+let alias_map: map[str, int] = m;
+alias_map["delta"] = 4;
+
+if (removed) {
+    print("removed");
+} else {
+    print("missing");
+}
+print(to_str_int(len(map.keys(m))));

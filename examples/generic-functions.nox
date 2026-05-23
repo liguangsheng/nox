@@ -1,0 +1,21 @@
+fn id<T>(value: T) -> T {
+    return value;
+}
+
+fn first<T>(pair: (T, str)) -> T {
+    let (value, label) = pair;
+    return value;
+}
+
+fn empty<T>() -> [T] {
+    return [];
+}
+
+let value: int = id(40) + first((2, "answer"));
+let values: [int] = empty();
+
+if (len(values) == 0) {
+    "generic:" + to_str_int(value);
+} else {
+    "bad";
+}

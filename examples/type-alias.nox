@@ -1,0 +1,19 @@
+type UserId = int;
+type Pair = (UserId, str);
+
+record User {
+    id: UserId,
+    name: str,
+}
+
+fn label(user: User) -> str {
+    let pair: Pair = (user.id, user.name);
+    let (id, name) = pair;
+    if (id == 42) {
+        return name + ":42";
+    }
+    return name;
+}
+
+let user: User = User { id: 42, name: "nox" };
+label(user);

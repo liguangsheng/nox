@@ -1,0 +1,5 @@
+import "std/string.nox" as string;
+
+let parts: [int] = [1, 2, 3];
+let joined: str = string.join(parts, ",");
+joined;

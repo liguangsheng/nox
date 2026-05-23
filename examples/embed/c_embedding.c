@@ -60,14 +60,18 @@ int main(void) {
     }
 
     NoxCoreValueKind params[] = {NOX_CORE_VALUE_INT};
-    status = nox_core_engine_register_host_function(
+    const char *host_caps[] = {"host.math"};
+    status = nox_core_engine_register_host_function_ex(
         engine,
-        "add_offset",
+        "math__add_offset",
         params,
         1,
         NOX_CORE_VALUE_INT,
         add_offset,
-        NULL
+        NULL,
+        "Adds the engine userdata offset to an integer.",
+        host_caps,
+        1
     );
     if (status != NOX_CORE_OK) {
         const char *error = nox_core_engine_last_error(engine);
@@ -77,7 +81,7 @@ int main(void) {
     }
 
     NoxCoreValue host_value = {0};
-    status = nox_core_engine_eval(engine, "add_offset(21);", &host_value);
+    status = nox_core_engine_eval(engine, "math__add_offset(21);", &host_value);
     if (status != NOX_CORE_OK || host_value.kind != NOX_CORE_VALUE_INT || host_value.int_value != 42) {
         const char *error = nox_core_engine_last_error(engine);
         fprintf(stderr, "%s\n", error != NULL ? error : "host callback failed");

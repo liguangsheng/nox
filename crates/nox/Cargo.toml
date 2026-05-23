@@ -6,3 +6,10 @@ version.workspace = true
 
 [dependencies]
 nox_core = { path = "../nox_core" }
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "runtime_capabilities"
+harness = false

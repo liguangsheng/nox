@@ -33,9 +33,9 @@ crate-private 类型、模块和测试 helper 都不构成兼容承诺。
 | --- | --- | --- |
 | 稳定嵌入入口 | `Engine::new`、`Engine::eval`、`Engine::check`、`Engine::check_diagnostics`、`Engine::run_tests` | 适合宿主直接依赖；签名、诊断传播和复用语义变化必须进入 CHANGELOG。 |
 | 稳定宿主扩展 | `HostFunctionBuilder`、`Engine::register_host_function`、`Type`、`Value`、`Value::{string,array,map,some,none,ok,err}` | 用于声明 host function 和传递值；新增类型或改变返回值 ownership 需要同步 Rust/C 文档。 |
-| 稳定错误表面 | `Diagnostic`、`Diagnostic::{new,with_code,with_source}`、`Span`、`SourceLocation` | `code`、byte span 和 source location 是机器契约；`message` 只保证可读，不作为稳定分支条件。 |
+| 稳定错误表面 | `Diagnostic`、`Diagnostic::{new,with_code,with_source,with_stack_frame}`、`Span`、`SourceLocation`、`StackFrame` | `code`、byte span、source location 和 runtime stack frame 是机器契约；`message` 只保证可读，不作为稳定分支条件。 |
 | 稳定会话入口 | `Session`、`Session::engine_mut`、`Session::{set_module_loader,clear_module_cache,set_module_overlay,remove_module_overlay,eval,check,check_diagnostics,hover_type}`、`ModuleGraph::{new,clear_cache,set_overlay,remove_overlay,cached_source}` | 适合编辑器和长期宿主会话；overlay 优先级、缓存失效和 module loader 错误语义必须保持文档一致。 |
-| 稳定运行时入口 | `nox::Runtime`、`RuntimePermissions`、`RuntimePermissions::{none,cli,allow_filesystem_read_under,allow_filesystem_write_under}`、`Runtime::{new,with_permissions,set_args,set_instruction_budget,pending_async_task_count,eval,eval_file,check_file,check_file_diagnostics,run_test_file,format_file,hover_type_source_with_base}` | `nox` 默认运行时表面；危险能力默认关闭，新增权限位不得隐式授权。 |
+| 稳定运行时入口 | `nox::Runtime`、`MockFilesystem`、`MockNetwork`、`MockHttpResponse`、`RuntimePermissions`、`RuntimePermissions::{none,cli,allow_filesystem_read_under,allow_filesystem_write_under}`、`Runtime::{new,with_permissions,set_args,set_mock_stdin,set_mock_stdout,set_mock_filesystem,set_mock_network,take_stdout,take_stderr,set_instruction_budget,pending_async_task_count,eval,eval_file,check_file,check_file_diagnostics,run_test_file,format_file,hover_type_source_with_base}` | `nox` 默认运行时表面；危险能力默认关闭，新增权限位不得隐式授权。 |
 | 工具/实验表面 | `Engine::{inspect_bytecode,inspect_bytecode_compact,format_source,hover_type,collect_garbage,heap_object_count,set_instruction_budget}` | 当前用于 CLI、调试、编辑器和回归测试；可继续使用，但输出格式、heap 统计细节和 bytecode 文本不作为长期稳定数据模型。 |
 | 内部不承诺 | lexer token、parser AST、bytecode module、verifier、VM、heap layout、crate-private compiler/runtime helper | 不面向宿主；正式文档不得要求下游依赖这些结构。 |
 
@@ -51,7 +51,7 @@ v0.0.x 本地开发阶段仍允许调整公共表面，但本地版本 checkpoin
 | `Engine` | 稳定 Rust 嵌入入口；`eval`、`check`、`check_diagnostics`、host function、module loader、budget、heap 观察语义需要文档同步。 | 新增方法、新增非必填配置、放宽诊断收集能力。 | 改已有方法签名、改变默认 intrinsics、改变 host function 类型检查或 budget 失败语义。 |
 | `Session` / `ModuleGraph` | 稳定高级会话入口；缓存源码字符串、overlay 优先级和 `engine_mut()` 兼容简单 API。 | 新增缓存统计、清理粒度、只读查询方法。 | 改 overlay 优先级、让权限隐式进入 session、暴露 AST/bytecode 作为稳定结构。 |
 | `HostFunctionBuilder` / `Type` / `Value` | 稳定宿主函数和值边界；容器值可被 Rust 宿主持有，函数值不能跨 C ABI 调用。 | 新增类型 variant 或构造 helper，前提是 docs、formatter、C/Rust API 表示同步。 | 改现有 variant 含义、改变容器相等性/ownership、让 `Value` 跨 engine 共享变成隐式支持。 |
-| `Diagnostic` / `Span` / `SourceLocation` | 稳定结构化错误载体；`code` 是机器契约，`message` 可优化。 | 新增稳定 code、新增 source 填充场景。 | 删除或重命名稳定 code、改变 span 为非 byte offset、让 JSON/LSP code 与 Rust API 分裂。 |
+| `Diagnostic` / `Span` / `SourceLocation` / `StackFrame` | 稳定结构化错误载体；`code` 和 runtime stack frame 是机器契约，`message` 可优化。 | 新增稳定 code、新增 source 或 stack frame 填充场景。 | 删除或重命名稳定 code、改变 span 为非 byte offset、让 JSON/LSP code 与 Rust API 分裂、改变 stack frame 顺序语义。 |
 | `Runtime` / `RuntimePermissions` | 默认运行时 API；权限显式，入口/import 读文件不等于脚本获得任意文件能力。 | 新增权限位、allowlist helper、观测方法。 | 默认授予危险能力、让 manifest `runtime.permissions` 自动授权、改变 async task id 生命周期。 |
 | C enums | `NoxCoreStatus`、`NoxCoreValueKind` 数值是 ABI 契约。 | 只允许在末尾追加 enum 值。 | 删除、重排或改已有数值。 |
 | `NoxCoreValue` | `repr(C)` value carrier；string 和 compound handle 所有权由 matching free 函数释放。 | 末尾追加字段需要 minor release 和 header/docs 同步。 | 改字段顺序/类型、改变已有 kind 的所有权规则。 |
@@ -268,6 +268,91 @@ assert_eq!(tasks.pending_async_task_count(), before);
 的 `try_read_text` 只把普通 I/O 失败变成 `err(message)`；权限不足、allowlist 越界和无效路径
 仍是 diagnostic，方便宿主区分“用户数据缺失”和“能力策略拒绝”。
 
+### Runtime stdio mock
+
+嵌入 `nox` 默认运行时时，宿主可以在单个 `Runtime` 实例上替换 stdin，并捕获脚本
+`print(...)` 写出的 stdout：
+
+```rust
+use nox::Runtime;
+
+let mut runtime = Runtime::new();
+runtime.set_mock_stdin(Some("payload\n".to_string()));
+runtime.set_mock_stdout(true);
+
+runtime.eval(r#"
+    import "std/process.nox" as process;
+    let input: str = process.read_stdin();
+    print("seen:" + input);
+"#)?;
+
+assert_eq!(runtime.take_stdout(), "seen:payload\n\n");
+runtime.set_mock_stdin(None);
+runtime.set_mock_stdout(false);
+```
+
+`set_mock_stdin(None)` 恢复读取真实进程 stdin。`set_mock_stdout(true)` 把 stdout
+写入 runtime 内部缓冲；`take_stdout()` 返回并清空该缓冲。`std/process.nox`
+的 `print_err(...)` 仍写入 stderr 缓冲，宿主用 `take_stderr()` 读取并清空。
+
+### Runtime filesystem mock
+
+宿主可以给单个 `Runtime` 注入确定性的只读文件系统：
+
+```rust
+use nox::{MockFilesystem, Runtime, RuntimePermissions};
+
+let root = std::env::temp_dir().join("nox-embed-fixture");
+let input = root.join("input.txt");
+
+let mut runtime = Runtime::with_permissions(
+    RuntimePermissions::none().allow_filesystem_read_under(&root),
+);
+runtime.set_mock_filesystem(Some(
+    MockFilesystem::new().with_text_file(&input, "fixture"),
+));
+
+let value = runtime.eval(&format!(r#"read_text("{}");"#, input.display()))?;
+```
+
+mock 覆盖 `read_text`、`try_read_text`、`exists`、`is_file`、`is_dir`、
+`list_dir`、`read_binary`、`write_text`、`write_binary` 和 `canonicalize`。
+每个 helper 仍先检查对应 filesystem capability 和 allowlist，再读取或修改 mock。
+启用 mock 后写入 helper 写入 mock 存储，不触碰真实文件系统。
+
+二进制数据对 embedding 宿主暴露为普通 Nox `[int]` 数组表示，每个元素必须在
+`0..=255`。当前还没有独立 bytes handle 或借用 buffer ABI：Rust 宿主沿用
+`Value::Array` ownership 规则，C 宿主沿用既有 array value/handle 生命周期。
+返回二进制数据的 stdlib helper 会分配新的数组；接收二进制数据的 helper 会先复制并校验
+数组，再把字节交给宿主操作。
+
+### Runtime network mock
+
+宿主可以给单个 `Runtime` 注入确定性的网络结果：
+
+```rust
+use nox::{MockNetwork, Runtime, RuntimePermissions};
+
+let mut runtime = Runtime::with_permissions(RuntimePermissions {
+    network: true,
+    ..RuntimePermissions::none()
+});
+runtime.set_mock_network(Some(
+    MockNetwork::new()
+        .with_tcp_connect("example.test", 80, true)
+        .with_http_text_response("GET", "http://example.test/data", 200, "fixture"),
+));
+
+let value = runtime.eval(r#"
+    import "std/http.nox" as http;
+    http.get("http://example.test/data", 1);
+"#)?;
+```
+
+mock 覆盖 `tcp_connect` 和 `std/http.nox` 的文本 / 二进制 GET / POST helper。
+每个 helper 仍先检查 `network` capability，再读取 mock。未配置的 mock HTTP
+请求返回 `result.err`，不会回落到真实网络。
+
 ## C ABI
 
 C ABI 位于 `crates/nox_core/include/nox_core.h`。当前边界刻意保守：
@@ -287,12 +372,13 @@ C ABI 位于 `crates/nox_core/include/nox_core.h`。当前边界刻意保守：
 | 表面 | 当前 ABI | Ownership / 生命周期 | 稳定性要求 |
 | --- | --- | --- | --- |
 | `NoxCoreStatus` | `OK=0`、`NULL_POINTER=1`、`INVALID_UTF8=2`、`ERROR=3` | 按值返回，无 ownership。 | 现有数值不可重排或复用；只能在末尾追加。 |
-| `NoxCoreValueKind` | `NULL=0`、`BOOL=1`、`INT=2`、`FLOAT=3`、`STRING=4`、`FUNCTION=5`、`ARRAY=6`、`MAP=7`、`RECORD=8`、`OPTION=9`、`RESULT=10` | 按值传递，无 ownership。 | 现有数值不可重排或复用；新增 kind 只能末尾追加并补转换测试。 |
+| `NoxCoreValueKind` | `NULL=0`、`BOOL=1`、`INT=2`、`FLOAT=3`、`STRING=4`、`FUNCTION=5`、`ARRAY=6`、`MAP=7`、`RECORD=8`、`OPTION=9`、`RESULT=10`、`JSON=11`、`TUPLE=12`、`ENUM=13` | 按值传递；`JSON` 通过 `string_value` 暴露序列化 JSON 文本，按 string ownership 释放。`TUPLE` 与 `ENUM` 当前只报告 kind，不暴露 C 读取 handle。 | 现有数值不可重排或复用；新增 kind 只能末尾追加并补转换测试。 |
 | `NoxCoreValue` | `repr(C)` value carrier，包含 scalar 字段、owned string pointer 和 owned compound handle pointer。 | `STRING` 的 `string_value` 用 `nox_core_string_free` 释放一次；compound handle 用匹配的 `*_free` 释放一次；scalar 无需释放。 | 字段顺序、字段类型和已有 kind 的 ownership 不可静默改变。 |
 | `NoxCoreEngine` | opaque engine handle。 | `nox_core_engine_new` 创建，`nox_core_engine_free` 释放一次；释放后所有 engine 相关 pointer 失效。 | 已有 engine 函数签名、null pointer 返回规则和 last_error 行为不可静默改变。 |
-| array/map/record/option/result handle | opaque read-only owning handle。 | 每个 handle 由 eval 或读取函数返回给宿主，宿主用对应 free 函数释放；读取返回的新 `NoxCoreValue` 按自身 kind 的 ownership 规则处理。 | handle 只读；不得要求宿主理解内部 layout。 |
+| array/map/record/option/result handle | opaque read-only owning handle。 | 每个 handle 由 eval 或读取函数返回给宿主，宿主用对应 free 函数释放；读取返回的新 `NoxCoreValue` 按自身 kind 的 ownership 规则处理。 | handle 只读；不得要求宿主理解内部 layout。tuple/enum 暂无 C 读取 handle，只通过 `NoxCoreValueKind` 暴露类型。 |
 | `nox_core_engine_last_error` | 返回 engine 持有的 null-terminated string pointer。 | 宿主不释放；下一次会设置错误的 engine 调用、`clear_error` 或 `engine_free` 后 pointer 失效。 | 错误字符串生命周期必须保持 engine-owned。 |
 | `NoxCoreHostCallback` | 同步 callback，`ctx`、args、arg_count、out_value 由 Nox 传入。 | `ctx` 由宿主管理；args 只在 callback 调用期间有效；callback 成功时写入 `out_value`。 | Nox 不解引用/free `ctx`；不承诺 callback 跨线程或 reentrant；callback 不得 unwind 穿过 C ABI。 |
+| `nox_core_engine_register_host_function_ex` | 在原 C callback 注册基础上追加 docstring 与 capability metadata。 | `name`、`param_types`、`docstring` 和 capability 字符串都在注册时复制；`ctx` 与 callback 生命周期规则同旧入口。 | 只能追加，不改变旧 `nox_core_engine_register_host_function` 签名；metadata 不隐式授权权限。 |
 
 enum 数值由 `api_tests::c_abi_enum_values_are_stable` 固定；header 声明与动态库 exported symbol
 的一致性、header 编译和 C smoke 由 `scripts/embedding-regression.sh` 覆盖。
@@ -333,6 +419,31 @@ nox_core_engine_register_host_function(
 );
 ```
 
+需要声明 host namespace 和 metadata 时，使用扩展入口。推荐 host 内部函数名采用
+`<namespace>__<function>`（双下划线）约定；脚本表面可再用普通 Nox wrapper 暴露更友好的
+命名空间。
+
+```c
+const char *caps[] = { "host.math" };
+nox_core_engine_register_host_function_ex(
+    engine,
+    "math__double",
+    params,
+    1,
+    NOX_CORE_VALUE_INT,
+    double_int,
+    NULL,
+    "Doubles an integer using host code.",
+    caps,
+    1
+);
+```
+
+`docstring == NULL` 表示没有文档；`capabilities == NULL` 只允许在 `capability_count == 0`
+时使用。metadata 字符串在注册时复制，之后宿主可以释放自己的输入缓冲。capability
+metadata 只用于 completion、hover 或审计等工具表面，不会给 callback 自动授予任何
+runtime 权限。
+
 也可以把共享上下文挂在 engine 上，并在注册 host function 时传 `NULL` 作为 callback `ctx`：
 
 ```c
@@ -356,7 +467,8 @@ nox_core_engine_register_host_function(
 
 ### Callback `ctx` 生命周期
 
-`nox_core_engine_register_host_function` 的 `ctx` 是宿主提供的不透明指针，
+`nox_core_engine_register_host_function` 和
+`nox_core_engine_register_host_function_ex` 的 `ctx` 是宿主提供的不透明指针，
 直接转交给 callback。Nox 不解引用 `ctx`，也不为它做任何 ownership 处理。
 约定如下：
 
@@ -439,7 +551,8 @@ scripts/embedding-regression.sh
 该脚本会运行 `nox_core` Rust API 测试、`nox` 默认 runtime 的 Session/Runtime 组合测试，
 然后编译并执行 C embedding smoke。C smoke 覆盖 version、userdata fallback、callback
 error、last_error/clear_error、string free 和 array/map/record/option/result handle free。
-Rust 回归还覆盖 array/map/record/option/result handle 保活嵌套 heap 值直到宿主释放 handle。
+Rust 回归还覆盖 array/map/record/option/result handle 保活嵌套 heap 值直到宿主释放 handle；
+tuple/enum C ABI 当前只固定 value kind，不新增读取 handle。
 
 ## ABI 兼容规则
 
@@ -498,13 +611,21 @@ pending task id；顶层 `Runtime::eval` / `run_test_file` 失败时会清理本
 task，不会取消更早调用留下的 task。v0.0.6 暂不把 task status 暴露到 C ABI 或脚本级
 `TaskStatus` record，避免把字符串状态或 tombstone 生命周期变成半成品契约。
 
-脚本字符串、函数、数组、map 和 record 通过 engine heap 分配。宿主可以观察对象数量并触发回收：
+脚本字符串、json、函数、数组、map、option、result、enum 和 record 通过 engine
+heap 跟踪。VM 分配和 host callback 返回值都会登记到 heap。宿主可以观察对象数量、
+设置总对象上限并触发回收：
 
 ```rust
 let mut engine = nox_core::Engine::new();
+engine.set_max_heap_objects(Some(1024));
 let value = engine.eval(r#""hello" + " world";"#)?;
 assert!(engine.heap_object_count() > 0);
 drop(value);
 engine.collect_garbage();
 assert_eq!(engine.heap_object_count(), 0);
 ```
+
+`set_max_heap_objects(None)` 是默认行为，不触发总量限制。设置上限后，超出时返回
+稳定 diagnostic code `runtime.heap-object-cap`。字符串长度、数组长度和 map entry 数
+仍分别由 `set_max_string_length`、`set_max_array_length` 和 `set_max_map_entries`
+控制。

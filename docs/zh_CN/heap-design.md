@@ -26,17 +26,21 @@
 
 因此 v0.0.3 接受下面限制：
 
-- 循环引用不会被回收；当前语言表面没有可变共享容器，真实脚本自然构造循环的路径有限。
+- 循环引用不会被回收；当前语言表面有 array/map 原地 mutation，但没有递归类型声明或
+  任意对象引用 API，真实脚本自然构造强引用循环的路径仍然有限。
 - 宿主长期持有 `Value` 或 C handle 时由 Rust ownership / C free 函数控制生命周期；宿主
   需要在合适时机 drop/free，并可调用 `collect_garbage()` 清理弱引用表。
 - `heap_object_count()` 是观测和测试指标，不是精确 GC telemetry。
+- `Engine::set_max_heap_objects` 是保守的运行期 guardrail：按 engine heap 当前活跃
+  object 数量拒绝继续执行，不改变 `Rc` ownership 或回收模型。
 
 ## 当前模型
 
 `crates/nox_core/src/heap.rs` 中的 `GcHeap` 是一个"弱引用追踪表"：
 
-- 每次分配 `Rc<str>`、`Rc<Array>`、`Rc<Map>`、`Rc<Record>`、`Rc<Function>` 时，
-  `GcHeap` 把 `Weak` 引用挂进对应的 `Vec`，方便观察对象数量。
+- 每次分配或登记 `Rc<str>`、`Rc<JsonValue>`、`Rc<Array>`、`Rc<Tuple>`、`Rc<Map>`、
+  `Rc<OptionValue>`、`Rc<ResultValue>`、`Rc<EnumValue>`、`Rc<Record>`、`Rc<Function>`
+  时，`GcHeap` 把去重后的 `Weak` 引用挂进对应的 `Vec`，方便观察对象数量。
 - 真正的所有权仍然是 `Rc`：`Value::Array(Rc<Array>)` 等持有引用，VM 栈、env、
   函数闭包都通过 clone `Rc` 共享。
 - `collect()` 只是定期把已经 `strong_count == 0` 的弱引用从表里清掉，**不是**
@@ -76,6 +80,9 @@
 - host callback 返回值：`repeated_host_callback_returns_do_not_accumulate_heap_values`
   覆盖 200 次 Rust host function 返回 string/array/map 后被脚本消费；每轮显式收集后
   heap count 回到 0，证明 callback 返回值不会在 engine heap 观测表里累积。
+- heap object cap：`max_heap_objects_rejects_vm_allocations_beyond_cap` 和
+  `max_heap_objects_tracks_host_return_values` 覆盖 VM 分配与 host callback 返回值都受
+  `Engine::set_max_heap_objects` 约束。
 - 长期宿主持有值：`host_held_rust_values_keep_heap_objects_until_dropped` 会批量持有
   string / array / map / record `Value`，确认宿主 drop 前对象保持存活、drop 后
   `collect_garbage()` 能把弱引用表清到 0。
@@ -116,9 +123,10 @@
 ## v0.0.3 暂不做
 
 - 不改 `Value` 表示：保留 `enum Value { ... Rc<...> ... }`。
-- 不把 array/map/record 改成 interior mutability：v0.0.3 容器表面保持构造后不可变。
+- 不把 record 改成 interior mutability；array/map 已有受类型检查和运行期边界约束的
+  原地 mutation。
 - 不引入 cycle collector：v0.0.2 不承诺回收循环引用，宿主应避免在共享对象间制造
-  环；脚本端没有显式可变共享，所以构造环需要刻意为之。
+  环；脚本端虽有 array/map mutation，但构造强引用循环仍需要刻意为之。
 - 不引入 finalization / drop trampoline：宿主用 `Drop` 兜底即可。
 - 不引入 `Engine::drop_value` 或 C handle registry：当前 Rust `Value` 由 Rust ownership
   管理，C 复合值由 owning handle + 对应 free 函数管理，测试覆盖了长生命周期释放路径。

@@ -2,6 +2,11 @@ import "std/fs.nox" as fs;
 
 import "std/env.nox" as env;
 
+export record HealthFlags {
+    manifest_ok: bool,
+    user_present: bool,
+}
+
 export fn file_present(path: str) -> bool {
     return fs.exists(path);
 }
@@ -25,14 +30,13 @@ export fn env_or_default(name: str, fallback: str) -> str {
     return pick_env_value(value, fallback);
 }
 
-export fn count_present(flags: [bool]) -> int {
+export fn count_present(flags: HealthFlags) -> int {
     let total: int = 0;
-    let i: int = 0;
-    while (i < len(flags)) {
-        if (flags[i]) {
-            total = total + 1;
-        }
-        i = i + 1;
+    if (flags.manifest_ok) {
+        total = total + 1;
+    }
+    if (flags.user_present) {
+        total = total + 1;
     }
     return total;
 }

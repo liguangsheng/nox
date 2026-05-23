@@ -6,6 +6,604 @@
 
 ## [未发布]
 
+## [0.0.4] — 2026-05-24
+
+### 稳定和兼容改进
+
+- 集合 mutation：`Value::Array` 与 `Value::Map` 内部 `elements`/`entries` 字段改为
+  `RefCell` 包裹，所有持有同一 `Rc<Array>` / `Rc<Map>` 的 alias 共享底层存储和可观察的
+  mutation。Rust API 新增 `Array::push`、`Array::pop`、`Array::set`、`Map::set`、
+  `Map::delete` 等方法；`Array::elements()` 与 `Map::entries()` 维持原签名但现在返回
+  owned snapshot（之前返回引用），下游 embedder 升级时需要在 snapshot 之外保留自己的
+  借用。C ABI handle 仍只读，不暴露 mutable 入口。
+- 语言能力：parser 接受 `fn(T1, T2, ...) -> R` 作为类型语法（之前仅作为内部签名存在）。
+  类型可出现在参数注解、返回类型、`let` 类型注解和容器元素类型中；命名函数可以通过
+  `let f: fn(int) -> int = double;` 绑定为 first-class value，并在调用、函数参数、
+  函数数组中使用。
+- 语言能力：新增 lambda 字面量 `fn(x: int) -> int { ... }`；可绑定到变量、作为参数
+  传递、放入容器，闭包通过 lexical env 自动捕获外部 binding（不引入显式 capture
+  clause，by-value-for-scalars + alias-for-containers）。typecheck 的泛型推导
+  `unify_call_type` 加入 `Type::Function` 分支以支持 `fn<T,U>(values: [T], f: fn(T) -> U)`
+  这类签名。
+- 标准库：`std/array.nox` 新增高阶 helper `map_fn<T,U>(values, f) -> [U]`、
+  `filter_fn<T>(values, predicate) -> [T]`、`reduce<T,A>(values, init, f) -> A`、
+  `for_each<T>(values, f) -> null`。这些 helper 用纯 nox 实现，调用 lambda/命名 fn
+  通过现有 Value::Function 调用路径，不引入新指令；与现有 alias-shared mutation
+  helper 协同。
+- 语言能力：泛型函数声明支持受限结构化约束 `fn name<T: Marker, U: M1 + M2>(...)`。
+  内建 marker 集合：`Equatable`、`Comparable`、`Stringify`、`Hashable`，typecheck
+  内置匹配规则（int/float/str/bool 全部支持；null/json 支持 Stringify + Equatable；
+  容器按元素递归；record/enum 视为不透明仅满足 Stringify；function 类型仅满足
+  Stringify）。约束违反在调用点报稳定 code `generic.constraint-unsatisfied`，未知
+  marker 报 `generic.constraint-unknown`。当前不开放用户自定义 trait/marker。
+- 标准库：`std/array.nox` 新增 `dedupe<T: Equatable>(values) -> [T]` 和
+  `contains_value<T: Equatable>(values, target) -> bool`，作为受限约束的真实使用点。
+- 语言能力：lexer 把 `try`、`catch`、`panic`、`defer`、`finally` 列为保留字，按
+  ADR 0021 暂留供未来异常机制评估。源码使用任一保留字作为标识符返回新稳定 code
+  `parse.reserved-keyword`。这是兼容收紧（之前可作普通 identifier）。
+- Rust API：`Runtime::set_mock_clock_unix(Option<i64>)` 让宿主注入固定 Unix 秒时间。
+  设置后 `time.now_unix()` 返回固定值，`time.now_unix_ms()` 返回该值 × 1000。设为
+  `None` 即恢复真实时钟。专为测试框架与确定性 snapshot 测试场景设计；不影响
+  `sleep_ms` 等真实计时行为。
+- Rust API：`Runtime::set_mock_env(Option<BTreeMap<String, String>>)` 让宿主注入
+  确定性环境变量集。设置为 `Some(map)` 时 `env.get(name)` / `env.try_get(name)` /
+  `env.list()` 全部读取 mock map（未命中 key 时 `env.get` 返回带 "not present in
+  mock env" 的诊断、`env.try_get` 返回 `none`）；设为 `None` 即恢复读取真实进程
+  环境。仍受 `environment` capability 控制，未授权时与真实环境一致返回 capability
+  诊断。
+- Rust API：`Runtime::set_mock_stdin(Option<String>)`、`set_mock_stdout(bool)` 和
+  `take_stdout()` 让嵌入宿主在单个 runtime 上替换 `std/process.nox` 的
+  `read_stdin()` 输入，并捕获脚本 `print(...)` 输出；`set_mock_stdin(None)` 恢复
+  真实 stdin，`set_mock_stdout(false)` 停止 stdout 捕获。`take_stderr()` 继续读取
+  `print_err(...)` 写入的 stderr 缓冲。
+- Rust API：新增 `MockFilesystem` 与
+  `Runtime::set_mock_filesystem(Option<MockFilesystem>)`。启用后
+  `std/fs.nox` 的 `read_text`、`try_read_text`、`exists`、`is_file`、
+  `is_dir`、`list_dir`、`read_binary`、`write_text`、`write_binary` 和
+  `canonicalize` 从 mock 文件集读写；每个入口仍先检查对应 capability 与
+  allowlist，mock 不会授予或扩大文件权限。启用 mock 后写入 helper 写入 mock
+  存储，不触碰真实文件系统。
+- Rust API：新增 `MockNetwork` / `MockHttpResponse` 与
+  `Runtime::set_mock_network(Option<MockNetwork>)`。启用后 `tcp_connect` 和
+  `std/http.nox` 的 `get` / `post` / `get_binary` / `post_binary` 读取 mock
+  网络响应；每个入口仍先检查 `network` capability，mock 不会授予网络能力。
+  未配置的 mock HTTP 请求返回 `result.err`，不会回落到真实网络。Criterion
+  `runtime_capabilities` 增加 `runtime/http-get-mock` case。
+- 标准库：`std/json.nox` 新增 `require_field(value, path, expected_kind)` 和
+  `validate_schema(value, required_fields)`。`require_field` 支持 `server.port` /
+  `tags[1]` 形式路径，类型不匹配或路径不存在返回带路径的 err；`validate_schema`
+  非递归检查 JSON object 必填字段，缺失字段拼接到 message。
+- 标准库：`std/json.nox` 新增 `validate_object(value, required_fields,
+  allowed_fields)`，在 `validate_schema` 的必填字段检查基础上额外报告 unknown
+  object keys。错误 message 会同时包含缺失字段和未知字段，便于配置 / schema
+  检查脚本一次性展示所有顶层 object 问题。
+- 标准库：`std/json.nox` 新增 `apply_defaults(value, defaults) -> result[json,
+  str]`。两个参数都必须是 JSON object；返回值会把 `defaults` 中缺失的顶层 key
+  注入到 `value` 的副本中，已有 key 不覆盖，用于配置 schema 的默认值补全。
+- 标准库：`std/json.nox` 新增 `apply_defaults_deep(value, defaults) -> result[
+  json, str]`。在 `apply_defaults` 的顶层规则基础上递归合并嵌套 JSON object，
+  只补缺失字段，不覆盖用户已有字段，满足配置 schema 的嵌套默认值补全。
+- Manifest：`nox.toml` schema 改为封闭集合，未知 section 或 `[package]` /
+  `[modules]` / `[runtime]` 内未知 key 现在返回稳定 code `manifest.invalid`。
+  `nox project check --json` 的 `nox.project-check.v1` 兼容新增
+  `schema_validation` 顶层对象，报告有效 manifest 已按封闭 schema 校验。
+- 标准库：`std/term.nox` 新增 `is_tty_stderr() -> bool`，对称于现有
+  `is_tty_stdout`；Unix 上通过 `isatty(stderr_fd)` 实现，Windows 上通过
+  `GetConsoleMode` 实现，其他平台返回 false。
+- 标准库：`std/term.nox` 新增 `progress(current, total, width) -> str`，纯计算
+  ASCII 进度条字符串（`[####-----] 4/10 (40%)`）。current 截到 `[0, total]`，
+  total = 0 时百分比显示为 0%，width 必须非负。返回字符串而不打印，非 TTY 安全。
+- 标准库：`std/term.nox` 新增 `prompt_password(message) -> result[str, str]`，
+  Linux 平台通过 termios (`tcgetattr` / `tcsetattr`) 直接关闭 stdin 回显并在读取后
+  恢复原始终端模式；回显控制不可用时返回
+  `term.prompt-password.echo-disable-failed` 而不静默退化为回显输入。EOF 返回
+  `term.prompt-password.eof`，I/O 错误返回 `term.prompt-password.read-failed`。
+  message 写入 stderr。
+- 标准库：`std/term.nox` 新增 `select(message, items, default_index) -> result[
+  int, str]`。把 `items` 渲染为带星标 default 的数字菜单到 stderr，从 stdin 读取
+  1-based 整数；空输入或 EOF 配合合法 default 时返回 default index，越界 / 非数字
+  返回 err。password input / progress bar / TUI 仍留作后续 session。
+- 标准库：新增 `std/random.nox` 提供 seeded PRNG（xorshift64）：
+  `next_int(seed, min, max) -> (int, int)`、`next_bool(seed) -> (int, bool)`、
+  `next_float_unit(seed) -> (int, float)`。所有 helper 返回 `(下一个 seed, 取值)`，
+  纯计算无 capability 依赖。`min > max` 报 runtime 诊断。让脚本可以写可复现的
+  property test 循环（自行用 next_int(seed, 0, len(arr)-1) 抽取数组）。
+- 测试框架：`std/test.nox` 新增 deterministic property helper：
+  `gen_int` / `gen_bool` / `gen_string` / `gen_int_array` / `gen_int_map` 以及
+  `assert_property_int(label, seed, cases, min, max, property)`。失败时会把 int
+  counterexample shrink 到更小值，并在 `test.assertion-failed` 诊断中写入
+  seed、case index、原始 value、minimized value 和 replay metadata。
+- 测试框架：新增
+  `assert_property_int_array(label, seed, cases, len, min, max, property)`，
+  对 `[int]` property case 执行结构化 shrink：先尝试缩短 failing prefix，再把
+  元素向 0 shrink；失败诊断写入原始长度、最小化长度、首元素和 replay metadata。
+- 测试框架：新增
+  `assert_property_int_map(label, seed, cases, len, min, max, property)`，
+  对 deterministic `k0..` `map[str, int]` property case 执行结构化 shrink：先缩短
+  key prefix，再把 value 向 0 shrink；失败诊断写入原始长度、最小化长度、首元素和
+  replay metadata。
+- 测试框架：`std/test.nox` 新增显式构造器版 record/enum property helper：
+  `gen_record3<T>(seed, min, max, build)`、`gen_enum3<T>(seed, min, max, max_len,
+  build_int, build_str, build_bool)`、`assert_property_record3<T>(...)` 和
+  `assert_property_enum3<T>(...)`。由于 Nox 当前没有反射/宏，record helper 通过
+  `fn(int, str, bool) -> T` builder 生成三字段值，enum helper 通过三个 variant
+  builder 生成三路 variant；失败时会结构化 shrink 字段 / payload / variant，并写入
+  replay metadata。
+- CLI：`nox test` 新增 `--export-failures <dir>` opt-in fuzz bridge。失败诊断包含
+  property replay metadata 时，会把原始 `.nox` 测试源码和 source/test/diagnostic
+  注释导出成 corpus 文件，可指向 `fuzz/corpus/...` 或 `tests/malformed/...`。
+- CLI：`nox test` 新增 `--export-failures-classified <dir>`，在保留
+  `--export-failures` 扁平导出兼容行为的同时，把 property replay 和模块级 malformed
+  失败按 diagnostic code 自动写入 `property` / `parser` / `typecheck` / `verifier` /
+  `runtime` 子目录，便于把导出 case 分流到 fuzz corpus 或坏输入回归。
+- 工具：`scripts/release-gate.sh` 新增 opt-in quality layers：
+  `NOX_RELEASE_GATE_PROPERTY=1` 跑 property failure export smoke，
+  `NOX_RELEASE_GATE_COVERAGE=1` 跑 coverage JSON / NDJSON smoke。默认 release gate
+  不跑这两层，保持 fast path 稳定。
+- 标准库：`std/json.nox` 新增类型化标量提取 helper：`as_int(value: json) ->
+  result[int, str]`、`as_float`、`as_str`、`as_bool`、`as_array(value) ->
+  result[[json], str]`、`as_object(value) -> result[map[str, json], str]`。
+  JSON kind 不匹配时返回 `result.err`（如 `expected JSON number, got string`）；
+  `as_int` 额外要求数字为有限整数。配合 `object_get` / `require_field`，脚本
+  可以手工把 JSON 映射为 record / enum；后续 `from_json<T>` 自动反序列化复用同一
+  类型提取语义。
+- 标准库：`std/json.nox` 新增 `to_json<T>(value: T) -> json` 一向序列化 helper。
+  支持把任意 Nox value 转成 `json`：record→object（按字段名）、enum 带 payload→
+  `{"_variant", "payload"}` / 无 payload→`"VariantName"` 字符串、tuple→array、
+  map→object、option→payload 或 null、result→`{"_variant": "ok"|"err",
+  "payload"}`、scalar/null 透传。function 值返回 runtime 诊断。Rust API：`Record`
+  公开 `name()`/`fields()` accessor，`EnumValue` 公开 `name()`/`variant()`/
+  `payload()` accessor。tagged enum 的默认 JSON 表示已采纳 adjacent 形状并由
+  ADR 0024 固定；`from_json<T>` 反向自动映射使用同一 adjacent 契约。
+- 标准库：`std/json.nox` 新增 `variant_name(value: json) -> result[str, str]`
+  与 `variant_payload(value: json) -> result[json, str]`，用于手工解析 adjacent
+  tagged enum JSON。无 payload enum 字符串可通过 `variant_name` 读出名称；带 payload
+  object 可读取 `_variant` 和 `payload`，为后续自动 enum 反序列化保留同一契约。
+- 标准库：`std/json.nox` 新增显式 builder 反解析 helper：
+  `decode_record3<T>(...) -> result[T, str]` 对三个 path-aware 字段执行 kind 校验后
+  调用 `fn(json, json, json) -> result[T, str]` builder；
+  `decode_adjacent_enum3<T>(...) -> result[T, str]` 按 adjacent enum variant 名称分派到
+  三个 `fn(json) -> result[T, str]` builder。该层作为 `from_json<T>` 之外的显式
+  可控扩展点保留。
+- 标准库 / VM：`std/json.nox` 新增 `from_json<T>(value: json) -> result[T, str]`
+  自动反序列化入口。调用点必须提供 expected `result[T, str]` 类型，编译器把目标
+  type 写入 `JsonDecode` bytecode，VM 按 record 字段、adjacent enum variant、scalar、
+  array、map、option 和 result 规则构造目标值；缺失字段、未知字段、类型不匹配和
+  unknown variant 返回 path-aware `result.err`，不抛 runtime diagnostic。
+- CLI：新增 `nox doc <file.nox>` 子命令，扫描文件中的顶层 `fn` 声明并输出 Markdown
+  文档；紧邻 fn 上方的连续 `///` doc comment 作为函数描述（吞掉单个前导空格以匹配
+  Markdown 风格）。当前为 text-based 扫描，富 AST 抽取、LSP hover 复用、stdlib
+  自动校验留作后续 ADR 评估。`scripts/release-gate.sh` product-shape guardrail 同步
+  加入 `nox doc`。
+- 测试框架：`TestCaseResult` 新增 `duration_us: u128` 字段记录每个 test 的真实
+  执行时间（包含 before_each / test body / after_each）。CLI JSON 输出
+  `nox.test.v1` 每条 test 加 `"duration_us": int` 字段（兼容扩展，旧消费者忽略）。
+- 测试框架：`nox.test.v1` 每条 test 记录兼容新增 `"stdout"` / `"stderr"` 字段。
+  `nox test --json` 期间脚本 `print(...)` 与 `std/process.nox` `print_err(...)`
+  按测试 case 捕获，避免污染外层 JSON stdout/stderr。
+- 测试框架：`std/test.nox` `assert_snapshot` 失败时，`nox.test.v1` 对应 test
+  记录兼容新增 `"snapshot_diff": {"label", "actual", "expected"}`；非 snapshot
+  失败或通过用 `null`。
+- 测试框架：`nox.test.v1` 兼容新增顶层 `"suites"` 数组，按测试文件输出
+  `{file, cases}`，让编辑器和 CI 工具可以直接消费 suite/case hierarchy，而不必从
+  平铺 `tests` 数组推导。
+- LSP：新增 Nox 扩展请求 `nox/testDiscovery`，按当前文档顶层 `test_*` 函数返回
+  `{uri, name, range}` 列表，供编辑器 test explorer 直接发现测试；现有
+  `textDocument/codeLens` 继续使用同一规则生成 `nox.runTest` 命令。
+- 测试框架：`std/test.nox` 新增 `assert_snapshot(label, actual, expected)`：失败时
+  返回 `test.assertion-failed` 并打印截断的 actual / expected 文本对比（160 字符以上
+  自动截断并标注剩余长度）。
+- 测试框架：`std/test.nox` 新增 `assert_table_row<T: Equatable>(label, index, actual,
+  expected)`：用于 table-driven 测试，失败时附带 row index 信息。脚本可在
+  `test_*_table() -> null` 中用 while + 数组遍历组合多个 case，不引入新语法。
+- 测试框架：`nox test` runner 识别 `before_each() -> null` 和 `after_each() -> null`
+  顶层函数，按约定在每个 `test_*` 函数前后调用。before_each 失败时跳过测试体并把
+  失败原因记到测试结果；after_each 失败把原本通过的测试转成失败。两个 hook 都可
+  返回 `null` 或 `bool`（与 test 函数同），多次声明同一 hook 报稳定 code
+  `test.signature`。
+- 标准库：新增 `std/bytes.nox` 提供轻量字节数组 helper：`encode_utf8(text) -> [int]`、
+  `decode_utf8(values) -> result[str, str]`、`len`、`get`、`slice_copy`、`equal`、
+  `base64_encode/decode`、`hex_encode/decode`。字节用 `[int]`（0..=255）表示，不引入新的
+  `Type::Bytes`（核心 parser/typecheck/VM 改造留作未来 ADR）。非 UTF-8 字节、
+  out-of-range int 都走 result.err / runtime 诊断；显示 / 线格式使用 hex/base64 helper。
+- 标准库：`std/fs.nox` 新增 `read_binary(path) -> result[[int], str]` 与
+  `write_binary(path, bytes) -> result[null, str]`，同样用 `[int]` 字节数组而不引入
+  `Type::Bytes`。`read_binary` 复用 `filesystem` capability 与 read allowlist；
+  `write_binary` 复用 `filesystem_write` capability 与 write allowlist；out-of-range
+  字节 (超过 0..=255) 返回 `result.err`。这条路径让脚本可以直接读写二进制文件
+  （图片、归档、二进制协议）而不必走文本编码桥接。
+- 标准库：`std/http.nox` 新增二进制 body 变体：
+  `get_binary(url, timeout_ms) -> result[(int, [int]), str]` 与
+  `post_binary(url, body, timeout_ms) -> result[(int, [int]), str]`。两者复用
+  既有 `network` capability、1 MiB 响应上限、30s 默认超时；body 与响应为 `[int]`
+  字节数组，不做 UTF-8 lossy 转换，适合图片 / 归档 / 二进制协议。底层 `http_request`
+  现在 wrap 新的 `http_request_bytes`，避免文本/二进制路径分叉。
+- 标准库：`std/fs.nox` 新增 `canonicalize(path) -> result[str, str]`，使用
+  `filesystem` read capability + read allowlist 校验输入路径；返回符号链接解析后
+  的绝对路径，底层 `fs::canonicalize` 失败时返回 `result.err`。
+- 测试框架：`nox test` 新增 `--retry <N>` 选项（0..=10）。失败 test 会被最多重跑
+  N 次；最后一次的结果作为最终结果。CLI JSON 输出每条 test 加 `attempts: int`
+  与 `retried: bool` 字段（兼容扩展，旧消费者忽略即可）。flaky test 必须显式开启
+  retry，默认行为不变。完整 property testing / coverage 强制门槛 / fuzz bridge
+  留作后续 ADR。
+- Rust API：`Runtime::engine_mut()` 公开 mutable Engine 访问，让宿主在创建 Runtime
+  后追加注册 host 函数。配合新示例 `crates/nox/examples/rust_embedding_namespace.rs`
+  演示 host namespace 约定（`<namespace>__<function>` 双下划线分隔），把 host 内部
+  helper 名字与脚本 surface 分离。
+- Rust API：`Engine::set_max_string_length(Option<usize>)` 给嵌入宿主提供
+  字符串长度上限配置。脚本拼接 (`+`) 超过 cap 时返回稳定诊断 code
+  `runtime.string-length-cap`，message 含实际长度与 cap。未配置 cap 时不触发
+  该诊断。用于限制脚本内存使用的细粒度控件。
+- Rust API：`Engine::set_max_array_length(Option<usize>)` 与
+  `Engine::set_max_map_entries(Option<usize>)` 给嵌入宿主提供数组 / map 大小
+  上限配置。超出 cap 时返回稳定诊断 code `runtime.array-length-cap` /
+  `runtime.map-size-cap`，message 含实际长度与 cap。覆盖字面量构造、`array.append`、
+  `map.set` 与 map 索引赋值增长；更新既有 map key 不增加 entry 数。
+- Rust API：`Engine::set_max_heap_objects(Option<usize>)` 给嵌入宿主提供跨
+  string / json / container / option / result / enum / record / function 的 heap
+  object 总数上限。VM 分配和 host callback 返回值都会登记到 engine heap；
+  超出 cap 返回稳定诊断 code `runtime.heap-object-cap`。
+- 基准测试：criterion `core_paths` 加 `core/eval-lambda` case；新增
+  `tests/benchmarks/bench-lambda.nox` 覆盖 lambda + 闭包 capture + 高阶函数
+  调用热路径。`scripts/bench-smoke.sh` 加 `lambda` 行（budget 0.5s，当前实测
+  ~5ms）。
+- 基准测试：新增 `tests/benchmarks/bench-host-capabilities.nox` 覆盖 permissioned
+  filesystem host helper 路径，`scripts/bench-smoke.sh` 加 `host-capabilities` 行。
+  新增 `crates/nox/benches/runtime_capabilities.rs`，Criterion 覆盖
+  `runtime/fs-read-text` 与 `runtime/async-task-ready`；`NOX_BENCH_CRITERION=1`
+  会同时运行 `nox_core` 与 `nox` runtime benchmark。
+- Rust API：`HostFunctionBuilder` 新增 `.docstring(text)` 和 `.capability(name)`
+  链式方法，让宿主在注册 host 函数时同步声明文档字符串与所需 capability（结构化
+  存储为 metadata，不直接强制运行时检查）。新增 `Engine::host_function_names()` /
+  `Engine::host_function_signature(name)` 公开 API，返回 `HostFunctionSignature`
+  (含 name / type_params / params / return_type / docstring / capabilities)。
+  CLI/LSP 基于这套 metadata 提供 host 函数 completion detail、hover、
+  signature help 和 capability 审计入口。
+- CLI：新增 `nox host-metadata --json`，输出 `nox.host-metadata.v1`，列出本地
+  进程内注册的 host function 签名、docstring 与 capability metadata；文本模式
+  输出同一内容的人类可读摘要。
+- C ABI：新增 `nox_core_engine_register_host_function_ex`，在现有同步 host callback
+  注册基础上追加可选 docstring 与 capability metadata。所有字符串在注册时复制；
+  callback、`ctx`、engine userdata、last_error、线程与非重入规则沿用旧入口。
+  `examples/embed/c_embedding.c` 改用该入口注册 `math__add_offset`，覆盖 host
+  namespace + metadata smoke。
+- 验证：`scripts/embedding-regression.sh` 在 release-gate 中跑新示例，保证 host
+  namespace 示例不被静默破坏。
+- CLI：`nox profile` 和 `nox coverage` 新增 `--json` 标志，输出 `nox.profile.v1` 与
+  `nox.coverage.v1` schema：`{schema, functions: [{name, call_count, total_us}],
+  operations: [{name, count, total_us}]}`。operation profile 覆盖 host callback、
+  array / tuple / map literal、index/index assignment、match pattern、map_get /
+  map_keys / map_values 等 VM 热路径。机器消费者可基于此构建 trace / 调用图分析。
+  人类可读 profile 输出在函数表后追加 operation 表。
+- Core / CLI：`nox coverage` 现在复用 VM span profile 数据，输出 statement
+  execution count 与 branch true/false count。`nox.coverage.v1` 兼容新增
+  `statements` / `branches` 数组，`nox.coverage.event.v1` 新增
+  `kind:"statement"` / `kind:"branch"` 事件；每条 coverage 记录包含 byte span 与
+  1-based source location。
+- CLI：新增 `nox trace [--ndjson] <file.nox>`，输出 `nox.trace.event.v1`
+  NDJSON 事件流。事件覆盖 run_start、静态 capability summary、捕获的 stdout/stderr、
+  permission_check、function_profile、operation_profile、host_callback、diagnostic
+  和 run_finish；每行都有稳定 `trace_id` 与递增 `seq`。
+- CLI：`nox trace` 的 diagnostic 事件现在携带 `span`、`source` 和可用的
+  `stack_frames`，让机器消费者能在同一条 `trace_id` / `seq` 事件里关联运行时错误、
+  源码位置和脚本调用栈。
+- Runtime / CLI：`nox trace` 启用 opt-in runtime trace buffer，并输出实际 host
+  边界事件：`io`（stdout/stderr write）、`timer`（sleep 尝试）和 `task`（spawn /
+  poll / cancel / join / pending_count）。事件同样使用 `nox.trace.event.v1`、
+  `trace_id` 与递增 `seq`，并记录 capability 拒绝时的 `allowed:false`。
+- Runtime / CLI：runtime `io` trace 事件扩展到 stdin read，以及顶层
+  `read_text` / `write_text` 与 `std/fs.nox` filesystem 操作；事件包含 path、bytes、
+  status、entries 和 capability 拒绝时的 `allowed:false`，便于排查脚本 I/O 边界。
+- Core / CLI：profiled VM 执行现在记录逐调用 host callback trace 事件，`nox trace`
+  输出 `host_callback_call` enter / exit 行，包含 callback name、span、elapsed_us
+  和 exit status。原有聚合 `host_callback` operation summary 保持不变。
+- DAP：`nox dap` 的 `initialize` 现在声明 `supportsConditionalBreakpoints` 和
+  exception breakpoint filter；`setBreakpoints` 会保留并回显 breakpoint
+  `condition` metadata，新增 `setExceptionBreakpoints` 响应并在 variables 中暴露
+  exception filter 数量。`configurationDone` 会在 launch 后对简单
+  `result == value` / `result != value` 条件做最小求值；匹配时发布
+  `reason:"breakpoint"` stopped event，不匹配时直接 terminated。开启 `raised`
+  exception filter 后，launch 阶段 runtime error 会发布 `reason:"exception"` stopped
+  event，并在 variables 中暴露 `exceptionMessage`。
+- DAP：`variables` request 支持可选 `depth` / `maxDepth` 参数。`0` 会抑制可展开
+  child reference；更大值会暴露受深度限制的 `debugState` 子变量，避免编辑器在最小
+  adapter 上无限展开变量。
+- LSP：`textDocument/publishDiagnostics` 的 error 和 warning 现在都会在
+  `data.trace_id` 中携带确定性关联 id；运行时栈帧仍放在同一个 `data` 对象中，方便
+  编辑器或外部工具把 LSP 诊断与 trace/log 记录对应起来。
+- Rust API：`Engine::set_max_call_stack_depth(Option<usize>)` 限制脚本函数调用栈
+  深度。超出上限返回新稳定 code `runtime.call-stack-overflow`，未设置时使用 OS
+  native stack 兜底（无 diagnostic）。`Vm` 内部新增引用计数式 `CallGuard` 在 drop
+  时减少 depth，避免 panic / err 路径泄露。ADR 0023 记录了暂缓 cycle collector
+  和 arena handle 的决策，明确依赖 `Rc + Weak<Env>` + 显式 budget 作为当前 v0.0.x
+  内存治理基线。
+- 文档：新增 `docs/{en,zh_CN}/stdlib-index.md` 按主题归类当前 stdlib 模块并标注
+  稳定性（stable / stable, permissioned / experimental）。维护规则文档化：新 helper
+  必须更新 stdlib-surface guardrail、新 capability 必须扩展 manifest / RuntimePermissions
+  / docs。
+- CLI：新增 `nox lint [--json] <file.nox> ...` 子命令，报告非阻断质量警告：
+  `lint.unused-variable`、`lint.unused-function`、`lint.unused-import`，针对顶层
+  声明 + AST 引用集合对比。`_`-前缀变量跳过 unused-variable 检查。退出码始终为 0
+  即使有 warning；`--json` 输出 `nox.lint.v1` schema。release-gate product-shape
+  guardrail 同步加入 `nox lint` 防止子命令被静默删除。
+- CLI：`nox lint` 扩展加入 `lint.unreachable-code`，检测函数体、`if` / `else`
+  分支、`while` / `for` body、lambda body、`match` case body 以及顶层 `Block`
+  中 `return` / `break` / `continue` 之后的不可达语句。仅在每个 block 的第一条
+  不可达语句处报告，避免噪音。
+- CLI：`nox lint` 扩展加入 `lint.shadowed-variable`，检测内层 `let` 声明遮蔽
+  外层同名 binding（函数参数、外层 `let`）；下划线前缀名豁免；同 scope 内的
+  reassignment（`name = value`）不报。新增 4 个 nox_core 单元测试 + CLI 集成
+  测试。tuple/record 解构 shadowing 仍留作后续 session。
+- CLI：`nox lint` 扩展加入 `lint.constant-condition`，检测 `if (true)` /
+  `if (false)`（条件总是 / 从不成立）以及 `while (false)`（body 永不执行）。
+  `while (true)` 作为 forever-loop idiom 豁免（脚本通过 `break` 或 `return`
+  退出）。新增 4 个 nox_core 单元测试 + CLI 集成测试。capability summary 留
+  作后续 session。
+- CLI：`nox lint` 扩展加入 `lint.duplicate-match-arm`，检测 `match` 语句中
+  两条 arm 的模式完全相同（int / float / str / range / enum-variant / some /
+  none / ok / err 递归对比）。后一条 arm 永远不可达，提示用户清理。新增 3 个
+  nox_core 单元测试 + CLI 集成测试。
+- CLI：`nox profile` / `nox coverage` 新增 `--ndjson` 选项输出每个函数一行
+  JSON 事件，schema 分别为 `nox.profile.event.v1` 与 `nox.coverage.event.v1`，
+  字段同 `--json` 聚合形式但去掉 `functions: [...]` 外层数组。便于工具用流式
+  方式消费。`--json` 与 `--ndjson` 互斥；同时指定返回 exit code 2。
+- LSP：`textDocument/publishDiagnostics` 现在同时透出 lint warning，使用
+  `severity: 2`（Warning），与 typecheck/runtime error 的 `severity: 1` 区分；
+  只在没有 error 时才查询 lint 以避免冗余。`lint.unused-function` 同时豁免
+  `test_*` / `before_each` / `after_each` 函数（test runner discovery convention），
+  避免在 nox test 项目中产生大量误报。
+- LSP：`textDocument/codeLens` 给 `test_*` 命名的顶层函数返回 "Run \<name>"
+  code lens（命令 `nox.runTest`，参数 `[uri, function_name]`）。
+  `initialize` 响应新增 `codeLensProvider: {resolveProvider: false}` capability。
+  让 VS Code / 其他 LSP 编辑器可以提供"运行测试"按钮，配合 `nox test --filter`
+  逐个执行测试函数。
+- 测试与维护：新增单元测试 `stdlib_index_documents_every_exported_helper`
+  与 `english_stdlib_index_documents_every_exported_helper`，自动校验 21 个内置
+  `std/*` 模块的所有 `export fn` 名称都在 `docs/zh_CN/runtime.md` /
+  `docs/zh_CN/stdlib-index.md` 与 `docs/en/runtime.md` / `docs/en/stdlib-index.md`
+  中各自被提及。新增 helper 必须同步进入两边文档；漂移会在 cargo test 阶段立即
+  失败。同时补全 en stdlib-index 之前未跟进的 helper（read_binary / write_binary
+  / canonicalize / run_with / select / is_tty_stderr / std/random / std/bytes 等）。
+- CLI：`nox doc` 扩展覆盖顶层 `record`、`enum` 与 `type` alias 声明（之前仅
+  `fn`），每个章节加 `Kind: ... Visibility: ...` 标签。`///` doc comment 关联
+  规则不变。新增 CLI 集成测试 `doc_emits_markdown_for_records_enums_and_type_aliases`。
+- LSP：`textDocument/hover` 在类型信息基础上追加紧邻顶层 `fn` / `record` /
+  `enum` / `type` / `let` / `const` 声明上方的 `///` doc comment 文本，让
+  编辑器把 doc comment 透给开发者。当前用 text-scan 实现（不引入 lexer / parser
+  改动），多行注释按空格 trim 后拼接。新增 CLI 集成测试
+  `lsp_hover_includes_doc_comment_for_top_level_function`。
+- CLI：`nox lint --json` 输出 `summary` 新增 `capabilities` 字段，按 `import
+  "std/X.nox"` 加上常见调用模式（`write_text(` / `write_binary(` / `sleep_ms(`
+  / `process.run(` 等）推断脚本所需 runtime capability 集合。文本模式追加
+  `capabilities: ...` 行。当前覆盖 `filesystem` / `filesystem_write` / `environment`
+  / `timers` / `async_tasks` / `network` / `process_run`。`summary.file_count` /
+  `summary.warning_count` 字段不变；旧消费者只需忽略新字段即可。
+- 标准库：新增 `std/term.nox` 提供交互式 CLI helper：`is_tty_stdout()`、
+  `color_enabled()`（`NO_COLOR` env 或非 TTY 关闭）、`style_color(value, color)` /
+  `style_bold(value)`（支持 red/green/yellow/blue/magenta/cyan/bold；颜色未启用时
+  透传原文）、`pad_column(value, width)`、`prompt(message)`、
+  `confirm(message, default_yes)`。password input、select 菜单、TUI 框架显式不实现。
+- 标准库：`std/process.nox` 新增 `run(program, args, stdin, timeout_ms) -> result[(int,
+  str, str), str]`，返回 `(exit_code, stdout, stderr)`。新增 `process_run` capability
+  （默认拒绝），manifest 中通过 `process_run` 字符串声明。可选 `process_run_allowlist`
+  限制可执行程序名（空白表示不限制）；输出硬上限 4 MiB（超出 kill 子进程）；
+  timeout_ms > 0 时到时间会 kill 进程。shell expansion / 管道 / PTY / 后台服务显式
+  不支持。
+- 标准库：`std/process.nox` 增加 `run_with(program, args, stdin, timeout_ms, cwd,
+  env_pairs) -> result[(int, str, str), str]`。`cwd` 为空字符串时继承当前工作目录，
+  非空作为 `Command::current_dir`；`env_pairs` 是 `[(str, str)]` 列表，在继承父
+  进程环境基础上叠加 key/value（空列表 = 完全继承），value 为 `"<unset>"`
+  时删除子进程环境中的该变量，空字符串继续表示设置为空值。共享 `run` 的
+  capability、allowlist、输出上限、timeout 规则。Rust API：`Tuple` 新增公开
+  `elements()` 与 `element_types()` 访问器，供宿主代码从 `Value::Tuple` 中取元素。
+- 标准库：`std/process.run` / `std/process.run_with` 的 `result.err` 消息现在以
+  稳定 code 前缀打头：`process_run.spawn-failed` / `process_run.timeout` /
+  `process_run.allowlist-denied` / `process_run.output-cap-stdout` /
+  `process_run.output-cap-stderr` / `process_run.stdin-write-failed` /
+  `process_run.wait-failed`。冒号后是人类可读详细信息，消费者按 `: ` 拆分。
+  这是 message 格式收紧，依赖旧消息字面值的代码需要更新（更新已落地的内部
+  allowlist 单元测试）。
+- Rust API：`RuntimePermissions::process_run_max_concurrent` 控制单个 Runtime
+  内同时运行的 `std/process.nox` 子进程数量，默认 `Some(8)`。达到上限时
+  `process.run` / `process.run_with` 返回 `process_run.concurrent-limit` 前缀的
+  `result.err`，已结束或失败的子进程会释放计数槽。
+- 标准库：`std/time.nox` 新增 UTC 日期算术：`add_days(unix_seconds, days)` /
+  `add_months(unix_seconds, months)`（月末日 clamp 到目标月最长日，如 Jan 31 +
+  1 month → Feb 28/29）、`year_of` / `month_of` / `day_of`（UTC 年/月/日，1-12 /
+  1-31）、`weekday_of`（ISO weekday，0=Mon..6=Sun）。所有 helper 纯计算，复用
+  既有 civil-day 算法。locale 格式化与非 UTC 时区仍留作后续 ADR。
+- 标准库：扩展 `std/time.nox` 加 duration helper（`from_seconds`/`from_minutes`/
+  `from_hours`/`to_seconds`/`to_minutes`/`to_hours`）、ISO-8601 编解码
+  （`iso8601_format(unix_seconds) -> str`、`iso8601_parse(value) -> result[int, str]`，
+  仅支持 UTC，`Z` 或 `+00:00` 后缀）、deadline helper（`deadline_ms`、
+  `is_past_deadline_ms`）。所有 helper 都是纯计算，不需要 capability。非 UTC 时区
+  parse 返回 `result.err`。
+- 标准库：新增 `std/encoding.nox` 提供 `base64_encode`、`base64_decode`、`hex_encode`、
+  `hex_decode`，纯计算；decode 失败返回 `result.err(message)`，非 UTF-8 字节也走 err
+  路径。新增 `std/dotenv.nox` 提供 `parse(source) -> result[map[str, str], str]`，
+  支持 `#` 注释、双引号、单引号、`export` 前缀。新增 `std/ini.nox`
+  `parse(source) -> result[map[str, map[str, str]], str]`，支持简单 `[section]`
+  分节、`=` / `:` key/value、`#` / `;` 注释，顶层 key 放在空字符串 section 下。
+  新增 `std/toml.nox` `parse(source) -> result[json, str]` 最小 reader，支持 table、
+  dotted key、字符串、bool、数字和数组，输出 JSON object；datetime / array-of-tables
+  等完整 TOML 特性返回 `result.err`。按 ADR 0003 不引入第三方依赖。YAML 显式不实现，
+  推荐使用 JSON / TOML / INI / dotenv。
+- 测试框架：`nox test` 加 `--filter <substr>` 选项，按 test 函数名子串过滤。
+- 测试框架：test 函数返回类型放宽：允许 `bool` 或 `null`（null 配合 assertion helper
+  raise diagnostic 表示失败）；`test.signature` message 同步更新为 "must return bool
+  or null"。
+- 标准库：新增 `std/test.nox` 提供 `assert_eq<T: Equatable>`、`assert_ne<T: Equatable>`、
+  `assert_true`、`assert_false`、`assert_contains`、`fail`。assertion 失败返回新稳定
+  code `test.assertion-failed`。assert_eq/ne 复用 ADR 0020 结构化约束 `Equatable`。
+- 标准库：新增 `std/task.nox`，包装现有 sleep-based 异步原语：`sleep_ms(ms) -> int`
+  返回 task id，`is_ready` 非阻塞 poll，`cancel(id)` 取消，`wait(id) -> bool` 阻塞
+  直到完成（unknown id 永远阻塞），`wait_or_timeout(id, timeout_ms) -> bool` 阻塞
+  最多 timeout 然后自动 cancel 并返回 false，`pending_count() -> int` 公开当前
+  pending 任务数。全部需要 `async task` capability。同时在 host 层新增 `task_join`
+  与 `task_pending_count` 内建以支持这些 helper；LSP stub 注册同签名。
+- Rust API：`RuntimePermissions::async_task_max_pending` 控制单个 Runtime 内 pending
+  sleep task 数上限，默认 `Some(1024)`。达到上限时 `task_sleep_ms` 返回稳定
+  diagnostic code `runtime.task-pending-cap`，且不创建 task id。
+- 标准库：新增 `std/url.nox` 与 `std/http.nox`。`std/url.nox` 提供 `parse(url)`
+  返回 `(scheme, host, port, path, query)` tuple、`build` 反向构造、`query_encode` /
+  `query_decode`（百分号编码，`+` 在 decode 时映射为空格，invalid percent 返回
+  `result.err`）。`std/http.nox` 提供 `get(url, timeout_ms)` 和 `post(url, body,
+  timeout_ms)` 返回 `result[(status: int, body: str), str]`；当前实现仅支持 HTTP（明文），
+  HTTPS / chunked transfer / keep-alive 不在范围内（HTTPS 需新 ADR 引入 TLS 依赖）。
+  HTTP client 复用现有 `network` capability，未授权返回 `network capability is required`
+  诊断；响应体硬上限 1 MiB；timeout_ms ≤ 0 时使用 30 秒默认超时；HTTP/1.1 请求强制
+  `Connection: close`。
+- CLI：新增 `nox watch [--interval-ms <ms>] (check|test|run) [args...]` 子命令，按
+  ADR 0022 实现 stat-poll 前台 watch 模式：监视 manifest `source_dirs` / `test_dirs`
+  下的 `.nox` 文件（没有 manifest 则用当前目录），默认 500ms 间隔，文件 mtime/size
+  变化时通过 `current_exe()` 自调子进程重新执行被包装命令；CTRL-C 退出。监视路径
+  不存在返回新稳定 code `watch.path-not-found`。daemon、增量 typecheck cache、hot
+  reload 显式不实现。`scripts/release-gate.sh` 的 product-shape guardrail 已加入
+  `nox watch` 防止 CLI 表面被静默删除。
+- 语言能力：新增 `arr[i] = value` 和 `map[key] = value` 索引赋值语法。语法糖编译为
+  新的 `IndexAssign` AST 节点和 bytecode 指令，运行时直接修改底层 `Value::Array` /
+  `Value::Map` 存储，等价于 `array.set` / `map.set` 但带 alias 共享语义；越界写入返回
+  稳定诊断 code `runtime.index-out-of-range`，对非数组/非 map LHS 报 `type.assign-target`。
+  formatter、parser 越深处接受同样语法。
+- 标准库：`std/array.nox` 新增 `set<T>(values: [T], index: int, value: T) -> result[null, str]`、
+  `append<T>(values: [T], value: T) -> null`、`pop<T>(values: [T]) -> option[T]`；
+  `std/map.nox` 新增 `set<T>(values: map[str, T], key: str, value: T) -> null` 与
+  `delete<T>(values: map[str, T], key: str) -> bool`。所有 mutation 都通过显式 helper
+  呈现，当前阶段不引入 `arr[i] = value` 或 `m[k] = value` 语法糖。
+- 诊断体验：typecheck 在 `undefined variable`、`record '...' has no field '...'`、
+  `enum '...' has no variant '...'` 和 `unknown type '...'` 报错时，会基于
+  Levenshtein 距离在当前作用域、record schema、enum schema、record/enum/type alias
+  名字集合中查找相近候选，并在原 message 末尾追加 `, did you mean 'X'?` 建议；
+  没有近似候选时 message 保持兼容旧形态。
+- 诊断体验：`Diagnostic.stack_frames` 新增 `kind` 字段，区分
+  `script`（用户脚本函数）和 `host`（host callback / 注册的 host function）；
+  CLI 文本输出新增 `[kind]` 标签（例如 `  at divide [script] (...)`），
+  CLI 和 LSP JSON 的 `stack_frames` 元素新增 `"kind"` 字符串字段。
+- 健壮性 corpus：`tests/malformed/` 新增 `stdlib-string-bad-call.nox`、
+  `stdlib-array-bad-call.nox`、`stdlib-process-exit-bad-type.nox`、
+  `stdlib-path-misspelled.nox`，覆盖阶段 16-19 stdlib 表面的类型错误、
+  错误使用和拼写错误；`scripts/robustness-smoke.sh` 同步把它们纳入
+  check/fmt 退出码矩阵。
+- 语言能力：默认 `nox` 运行时新增 `print(value: str) -> null` 与
+  `to_str_int` / `to_str_float` / `to_str_bool` / `to_str_null` / `to_str_str`
+  输出辅助；`nox run` 对最终 `null` 不再额外打印 `null`，脚本可以直接用
+  `print(to_str_int(42))` 输出一行文本。
+- 标准库：新增 `std/string.nox` 纯计算模块，提供 `split`、`substring`、`trim`、
+  `replace`、`starts_with`、`ends_with`、`index_of`、`to_upper` 和 `to_lower`；
+  新函数不需要 runtime capability，并已纳入 stdlib surface guardrail。
+- 标准库：扩展 `std/string.nox`，新增 `join`、`contains`、`last_index_of`、
+  `repeat`、`pad_left`、`pad_right`、`parse_int`、`parse_float` 和 `lines`；
+  文本解析失败返回 `result.err(message)`，不需要 runtime capability。
+- 语言能力：字符串字面量支持 `${expr}` 插值，占位表达式可自动 stringify
+  `null`、`bool`、`int`、`float` 和 `str`；`\\$` 可用于输出字面量 `$`。
+- 语言能力：新增 `?` 后缀错误传播运算符，支持在函数内从 `result[T, E]`
+  和 `option[T]` 解包成功值，并在 `err` / `none` 时按当前函数返回类型提前返回；
+  不兼容上下文使用稳定诊断 code `result.question-mark.mismatch`。
+- 语言能力：新增 record method 调用糖，`record_value.method(args)` 会按
+  `method(record_value, args)` 类型检查和执行；找不到匹配函数或 receiver 类型不匹配时
+  使用稳定诊断 code `record.method-not-found`。
+- 语言能力：扩展 `match` pattern，支持 `float` 字面量、`int` 半开范围
+  `start..end`，以及 `some(some(value))`、`some(none)`、`ok(some(value))`
+  等嵌套 option/result destructuring；非穷尽 match 使用稳定诊断 code
+  `match.non-exhaustive`。
+- 标准库：扩展默认运行时数学内建，新增 `abs`、`min`、`max`、`pow`、
+  `floor`、`ceil`、`round`、`log`、`log2`、`sin`、`cos`、`tan`、`pi`
+  和 `e`，并将完整 math surface 纳入 stdlib surface guardrail；`sqrt` 负数和
+  `log` / `log2` 非正数会返回 runtime diagnostic。
+- 标准库：扩展 `std/time.nox`，新增 `now_unix`、`now_unix_ms`、`duration_ms`、
+  `format_unix` 和 `parse_unix`；Unix 时间格式化/解析使用 UTC，支持 `%Y/%m/%d/%H/%M/%S`
+  和 `%%`，解析错误通过 `result.err(message)` 返回。
+- 语言能力：新增 map ergonomics 内建 `map_keys`、`map_values`、`map_has`
+  和 `map_size`；当前 map key 固定为 `str`，`map_keys` / `map_values` 按 key 字典序返回。
+- 标准库：新增不透明 `json` 值类型与 `std/json.nox` 纯计算模块，提供
+  `parse(value: str) -> result[json, str]` 和 `stringify(value: json) -> str`，覆盖
+  number/string/bool/null/array/object 基础 JSON 形态；malformed JSON 返回 `err(message)`。
+- 标准库：扩展 `std/json.nox`，新增 `kind`、`array_len`、`array_get`、
+  `object_has` 和 `object_get` helper；错误 kind、越界 index 和缺失 key 都返回
+  `result.err(message)`。
+- 标准库：新增 `std/csv.nox` 与 `std/tsv.nox` 单行文本数据 helper，提供
+  `parse_line(value: str) -> result[[str], str]` 和格式化行输出；CSV 支持双引号字段和
+  `""` 转义，TSV 格式化会拒绝包含 tab 的字段。
+- 语言能力：容器类型标注允许 tuple、map、option 和 result 作为 array/map 元素类型，例如
+  `[(str, int)]` 和 `map[str, option[int]]`，以支撑数据结构 helper 的公开签名。
+- 标准库：新增 `std/array.nox`、`std/map.nox`、`std/option.nox` 和 `std/result.nox`
+  纯计算 helper；覆盖 array copy/sort/slice、map entries/merge/remove/get_or，以及
+  option/result 状态判断和 fallback，不引入原地 mutation、闭包或高阶函数。
+- 标准库：新增 `std/process.nox`，提供 `argv() -> [str]`、`read_stdin() -> str`、
+  `print_err(value: str) -> null` 和 `exit(code: int) -> null`；`argv()` 与既有 `args()` 一致，
+  不包含脚本路径，`exit` 接受 0-255 并作为 `nox run` 成功执行后的进程退出码。
+- 标准库：新增 `std/path.nox` 纯计算路径 helper（`join`、`basename`、`dirname`、
+  `extension`、`normalize`），并扩展 `std/fs.nox` 的 `is_file`、`is_dir` 和
+  `list_dir(path) -> result[[str], str]`；新增 fs helper 沿用 filesystem capability 与 read
+  allowlist，`list_dir` 按名称排序返回目录项。
+- 语言能力：整数字面量新增 `0xff` 十六进制、`0b1010` 二进制、`0o17` 八进制和
+  `_` 分隔符；malformed 整数字面量使用稳定诊断 code `lex.invalid-integer`。
+- 语言能力：字符串字面量新增 `"""..."""` 多行字符串和 `r"..."` raw 字符串；
+  多行字符串保留内部换行，raw 字符串不解析 escape 或 `${...}` 插值标记。
+- 语言能力：新增单引号字符字面量，如 `'A'`、`'界'` 和 `'\n'`；该语法降为单字符
+  `str` 值，暂不引入独立 `char` 或 `bytes` 类型。
+- 语言能力：新增 tuple 类型和值，如 `(int, str)` 与 `(42, "nox")`，并支持
+  `let (a, b) = pair;` tuple 解构和 `let { x, y } = point;` record 解构；tuple
+  数量和元素类型错误分别使用稳定诊断 code `tuple.arity-mismatch` 与
+  `tuple.element-type-mismatch`。
+- 语言能力：新增顶层类型别名，如 `type UserId = int;` 和
+  `type Pair = (UserId, str);`；alias 在类型检查时透明展开，循环别名使用稳定诊断
+  code `type-alias.cyclic`。
+- 语言能力：新增用户自定义 `enum` / sum type，支持 `EnumName.Variant` 与
+  `EnumName.Variant(value)` 构造，并通过 `match` 解包；用户 enum match 必须覆盖所有
+  variant，缺失分支使用稳定诊断 code `match.non-exhaustive`，未知 variant 使用
+  `enum.variant-not-found`。
+- 语言能力：新增函数级泛型参数，如 `fn id<T>(value: T) -> T`；调用点从实参和 expected
+  return type 推导类型参数，推导冲突或缺少上下文时使用稳定诊断 code
+  `generic.infer-failed`。泛型 record、泛型 trait、显式 type argument、一等函数值和高阶函数仍暂缓。
+- 诊断：运行时错误现在携带脚本函数调用栈；人类 CLI 输出会打印 `at <function>` 栈帧，
+  `nox.test.v1` diagnostic 和 LSP diagnostic data 会在有栈时包含兼容新增字段
+  `stack_frames`，顺序为最近调用帧在前。
+- 语言能力：新增 `int` 位运算符 `&`、`|`、`^`、`<<`、`>>` 和一元 `~`；非 `int`
+  操作数使用稳定诊断 code `type.bitwise-non-int`。`>>` 是算术右移，移位计数必须在
+  `0..64` 内。
+- 语言能力：新增 `if let`、`let ... else` 和 `while let` 控制流语法，复用 `match`
+  pattern 解包 `option`、`result` 与用户 `enum`；`let ... else` 的 `else` 分支必须提前
+  `return`，否则使用稳定诊断 code `control-flow.let-else-fallthrough`。
+- 语言能力：新增 array / map literal spread，支持 `[...arr, value]` 与
+  `{...defaults, "k": value}` 创建新容器；map 合并按书写顺序让后面的 key 覆盖前面的 key，
+  spread 源类型不匹配使用稳定诊断 code `type.spread-mismatch`。
+- 文档：README 与 README_zh_CN 新增 `cargo install` 安装路径，覆盖 `cargo install --git https://github.com/liguangsheng/nox --tag vX.Y.Z --locked nox` 与本地 `cargo install --path crates/nox --locked` 两种用法，并说明 `cargo install` 不产出 `nox_core` 的 C ABI 动态库——嵌入式宿主需要 `nox-embed` release 包或 `cargo build --release -p nox_core`。
+- 文档：README 与 README_zh_CN 中的 release 下载示例从 `v0.0.2` 资产名同步到 `v0.0.3`。
+
+### 工具和验证
+
+- 工具链：新增阶段 14 工具面，包含 `nox repl`、TextMate grammar、VS Code `.vsix`
+  扩展打包、LSP signature help / code action、`nox dap` Debug Adapter Protocol 最小子集、
+  以及 `nox profile` / `nox coverage`。profile 通过 VM 调用路径记录脚本函数调用次数和累计时间；
+  VS Code 扩展同时贡献高亮、LSP 与 Nox debug 配置。
+- 工具：新增 `fuzz/` cargo-fuzz workspace，包含 `parser`、`typecheck` 和 `verifier` 三个
+  fuzz target 及 seed corpus；`nox_core` 仅在 `--cfg fuzzing` 下暴露 fuzz harness，正常 Rust API
+  和 C ABI 不变。`scripts/release-gate.sh` 新增 opt-in fuzz 段：设置
+  `NOX_RELEASE_GATE_FUZZ=1` 后按 `NOX_FUZZ_TIME` 对三项目标运行 `cargo +nightly fuzz run`。
+- 工具：新增 `scripts/sanitizer-smoke.sh`，使用 nightly ASan 运行 heap/C ABI ownership 回归、
+  TSan 运行 host callback 回归，并用 Valgrind leak check 跑 C embedding smoke；
+  `scripts/release-gate.sh` 新增 opt-in sanitizer 段，设置 `NOX_RELEASE_GATE_SANITIZER=1` 时接入同一门禁。
+- 工具：`nox_core` 新增 Criterion benchmark `core_paths`，覆盖递归 check/compile、loop eval 和
+  container eval 三条关键路径；`scripts/bench-smoke.sh` 保留原有快速 smoke，同时支持
+  `NOX_BENCH_CRITERION=1` 运行 `cargo bench -p nox_core --bench core_paths` 输出统计置信区间。
+- CLI：`nox project check --json` 的 `nox.project-check.v1` 兼容新增 `entrypoints`、
+  `capabilities.declared` 和 `module_graph` 顶层字段，用于报告 manifest 入口、声明的 runtime
+  capability 以及 `modules.source_dirs` 下发现的 `.nox` 文件。
+- LSP：`initialize` 现在声明 `documentSymbolProvider` 和 `definitionProvider`；新增
+  `textDocument/documentSymbol` 当前文档顶层声明列表，以及 `textDocument/definition` 当前文档顶层
+  声明跳转的保守子集。跨文件定义、workspace symbol 和 rename 仍未声明为能力。
+- 工具：v0.0.3 release 后收紧 release-gate 阈值（PLAN 完成定义第 10-12 项的护栏数值），让"小型"和"快速"门槛对回归更敏感：
+  - `NOX_SIZE_CAP_CLI` 由 4 MiB 收紧到 2.5 MiB（v0.0.3 实测 1.67 MiB，留 ~1.5x 缓冲）。
+  - `NOX_SIZE_CAP_CORE` 由 2.5 MiB 收紧到 1.5 MiB（v0.0.3 实测 1.03 MiB，留 ~1.45x 缓冲）。
+  - `NOX_BENCH_BUDGET_FIB` 2.0s → 1.0s、`LOOP` 3.0s → 1.5s、`CONTAINERS` 1.0s → 0.3s、`MODULES` 1.0s → 0.3s、`NOX_TEST` 2.0s → 1.0s（每项相对实测最大值留 7-15x 缓冲）。
+  - `NOX_EMBEDDING_TIME_BUDGET` 180s → 60s（warm cache 实测 ~1s，留 60x 缓冲覆盖 CI cold-rebuild 场景）。
+  阈值变更通过环境变量仍可在调试时临时上调；后续 release-prep 阶段不允许临时上调来掩盖回归。
+- 工具：ADR 0025 重新校准 release-gate CLI 二进制大小上限：`NOX_SIZE_CAP_CLI`
+  从 2.5 MiB 调整为 2.75 MiB。当前 release 构建实测约 2.55 MiB；增长来自
+  profile/trace/coverage、DAP/LSP 和 JSON/schema 标准库等生产可观测性与工具能力。
+  `NOX_SIZE_CAP_CORE` 仍保持 1.5 MiB，零第三方运行时依赖约束不变。
+
 ## [0.0.3] — 2026-05-22
 
 本版本紧接 `v0.0.2` 基线，把 v0.0.2 之后累积的文档基础设施改动（中英文档拆分、英文 README、test
@@ -24,7 +622,7 @@ release-time 护栏与 GOAL 实现判定，让 `scripts/release-audit.sh` 能在
 - 工具：release-gate 新增 small-footprint guardrail（PLAN 完成定义第 10 项）：release CLI 二进制大小 ≤ 4 MiB、`libnox_core` 动态库 ≤ 2.5 MiB、第三方运行时依赖数 = 0、LOC 趋势记录。当前基线分别为 1,673,912 / 1,030,240 bytes、0 第三方依赖、19,489 行 Rust 源码。阈值上调需独立 commit + CHANGELOG + ADR，不允许在 release-prep 阶段临时上调。
 - 工具：`scripts/bench-smoke.sh` 新增 per-case e2e budget（PLAN 完成定义第 11 项）：bench-fib ≤ 2.0s、bench-loop ≤ 3.0s、bench-containers ≤ 1.0s、bench-modules ≤ 1.0s、nox-test ≤ 2.0s。budget 在 release-gate `benchmark smoke` 段强制执行，超 budget 立即 fail。当前 release 实测分别为 ~0.04 / 0.05 / 0.016 / 0.008 / 0.002 秒，budget 留 6-1000x 缓冲应对 CI 共享核与机器负载波动。budget 上调需独立 commit + CHANGELOG + ADR。
 - 工具：release-gate 在 `embedding regression` 段加 wall-time budget（PLAN 完成定义第 12 项前半）：默认 `NOX_EMBEDDING_TIME_BUDGET=180` 秒，覆盖 Rust API/runtime test、Rust embedding 示例、`nox_core` 动态库 build、C ABI header↔library symbol parity 与 C 嵌入 smoke 编译/链接/运行；当前 warm cache 下 ~1 秒。
-- 工具：release-gate 新增 stdlib surface guardrail（PLAN 完成定义第 12 项后半）：`tests/fixtures/stdlib-surface.nox` 集中类型检查 fs/env/time/net/async/math/string 七类公开入口，任一签名缺失或被删除立即失败。
+- 工具：release-gate 新增 stdlib surface guardrail（PLAN 完成定义第 12 项后半）：`tests/fixtures/stdlib-surface.nox` 集中类型检查 fs/env/time/net/async/math/string/json/csv/tsv/array/map/option/result 公开入口，任一签名缺失或被删除立即失败。
 
 ### 示例项目
 

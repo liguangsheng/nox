@@ -1,0 +1,11 @@
+let multiline: str = """first
+second""";
+let raw: str = r"raw\n${value}";
+let letter: str = 'N';
+let escaped: str = '\n';
+
+if (multiline == "first\nsecond" && raw == "raw\\n\${value}" && letter == "N" && escaped == "\n") {
+    "string-extended-ok";
+} else {
+    "string-extended-bad";
+}

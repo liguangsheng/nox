@@ -8,6 +8,7 @@ Start here:
 - [Language v0](language-v0.md): implemented syntax, types, expressions, modules, and current limits.
 - [CLI](cli.md): command behavior, exit codes, and JSON output.
 - [Runtime](runtime.md): permissions, standard library modules, and capability boundaries.
+- [Standard Library Index](stdlib-index.md): stdlib modules grouped by topic with stability tags.
 - [Embedding](embedding.md): Rust API, C ABI, host functions, ownership, and error handling.
 - [Diagnostics](diagnostics.md): stable machine-readable diagnostic codes.
 - [Development](development.md): validation commands and contribution rules.

@@ -1,0 +1,6 @@
+let input: option[option[int]] = some(none);
+
+match (input) {
+    some(some(value)) => {}
+    none => {}
+}

@@ -1,0 +1,16 @@
+import "std/process.nox" as process;
+import "std/string.nox" as string;
+
+let argv: [str] = process.argv();
+let input: str = process.read_stdin();
+let trimmed: str = string.trim(input);
+
+if (len(argv) > 0 && trimmed != "") {
+    process.print_err("processed:" + argv[0]);
+    process.exit(0);
+    "stdio-ok:" + trimmed;
+} else {
+    process.print_err("missing input");
+    process.exit(2);
+    null;
+}

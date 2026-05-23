@@ -1,12 +1,20 @@
 let scores: map[str, int] = {"core": 20, "runtime": 22};
 
 let core: option[int] = map_get(scores, "core");
+let keys: [str] = map_keys(scores);
+let values: [int] = map_values(scores);
+let has_core: bool = map_has(scores, "core");
+let size: int = map_size(scores);
 
 let total: int = 0;
 
 match (core) {
     some(value) => {
-        total = value + scores["runtime"];
+        if (has_core && size == 2 && keys[0] == "core") {
+            total = value + scores["runtime"] + values[0] - values[0];
+        } else {
+            total = 0;
+        }
     }
     none => {
         total = 0;

@@ -84,7 +84,7 @@ run_gate "scoreboard std module fmt" "$NOX_BIN" fmt --check examples/projects/sc
 # C embedding smoke compile + link + run. We attach a wall-time budget so a
 # silent regression that doubles build/link cost surfaces as a release-time
 # blocker, not just a slow CI run.
-NOX_EMBEDDING_TIME_BUDGET=${NOX_EMBEDDING_TIME_BUDGET:-180}
+NOX_EMBEDDING_TIME_BUDGET=${NOX_EMBEDDING_TIME_BUDGET:-60}
 run_gate "embedding regression (time budget)" env BUDGET="$NOX_EMBEDDING_TIME_BUDGET" sh -eu -c '
 start=$(date +%s)
 scripts/embedding-regression.sh
@@ -97,6 +97,58 @@ fi
 printf "embedding regression: %ss (budget %ss)\n" "$elapsed" "$BUDGET"
 '
 run_gate "robustness smoke" scripts/robustness-smoke.sh
+
+# Optional long-running quality-deepening gate (PLAN stage 15).
+# Keep it opt-in so normal release-gate runs stay fast and deterministic, but
+# make the exact command part of the shared gate instead of tribal knowledge.
+if [ "${NOX_RELEASE_GATE_PROPERTY:-0}" = "1" ]; then
+    run_gate "property failure export smoke" env NOX_BIN="$NOX_BIN" sh -eu -c '
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/nox-property-gate.XXXXXX")
+trap "rm -rf \"$tmp\"" EXIT
+cat >"$tmp/property_test.nox" <<'"'"'NOX'"'"'
+import "std/test.nox" as test;
+
+fn test_property_fails() -> null {
+    test.assert_property_int("negative-rejected", 3, 20, -20, 20, fn(value: int) -> bool {
+        return value >= 0;
+    });
+    return null;
+}
+NOX
+set +e
+"$NOX_BIN" test --export-failures "$tmp/corpus" "$tmp/property_test.nox" >"$tmp/stdout" 2>"$tmp/stderr"
+status=$?
+set -e
+if [ "$status" -ne 1 ]; then
+    printf "expected property test to fail with exit 1, got %s\n" "$status" >&2
+    cat "$tmp/stdout" >&2
+    cat "$tmp/stderr" >&2
+    exit 1
+fi
+find "$tmp/corpus" -type f -name "*.nox" -print -quit | grep -q .
+grep -R "property failed seed=3 case=" "$tmp/corpus" >/dev/null
+'
+fi
+
+if [ "${NOX_RELEASE_GATE_COVERAGE:-0}" = "1" ]; then
+    run_gate "coverage JSON opt-in smoke" env NOX_BIN="$NOX_BIN" sh -eu -c '
+"$NOX_BIN" coverage --json tests/benchmarks/bench-fib.nox | grep -q "\"schema\":\"nox.coverage.v1\""
+"$NOX_BIN" coverage --ndjson tests/benchmarks/bench-fib.nox | grep -q "\"schema\":\"nox.coverage.event.v1\""
+'
+fi
+
+if [ "${NOX_RELEASE_GATE_FUZZ:-0}" = "1" ]; then
+    NOX_FUZZ_TIME=${NOX_FUZZ_TIME:-60}
+    CARGO_NIGHTLY=${CARGO_NIGHTLY:-"$HOME/.cargo/bin/cargo"}
+    for target in parser typecheck verifier; do
+        run_gate "cargo-fuzz $target (${NOX_FUZZ_TIME}s)" "$CARGO_NIGHTLY" +nightly fuzz run "$target" -- -max_total_time="$NOX_FUZZ_TIME"
+    done
+fi
+
+if [ "${NOX_RELEASE_GATE_SANITIZER:-0}" = "1" ]; then
+    run_gate "sanitizer smoke" scripts/sanitizer-smoke.sh
+fi
+
 run_gate "benchmark smoke" env -u NOX_BIN scripts/bench-smoke.sh
 
 # Product-shape guardrail: PLAN 完成定义第 9 项的 release-time 显式断言。
@@ -106,7 +158,7 @@ run_gate "benchmark smoke" env -u NOX_BIN scripts/bench-smoke.sh
 run_gate "product-shape guardrail: CLI subcommand surface" env NOX_BIN="$NOX_BIN" sh -eu -c '
 usage=$("$NOX_BIN" --help 2>&1 || true)
 missing=""
-for sub in "nox run" "nox check" "nox test" "nox fmt" "nox project check" "nox lsp" "nox inspect-bytecode"; do
+for sub in "nox run" "nox check" "nox test" "nox fmt" "nox project check" "nox repl" "nox lsp" "nox dap" "nox profile" "nox coverage" "nox inspect-bytecode" "nox watch" "nox lint" "nox doc" "nox host-metadata"; do
     case "$usage" in
         *"$sub"*) ;;
         *) missing="$missing\n  $sub" ;;
@@ -122,8 +174,8 @@ fi
 # Small-footprint guardrail: PLAN 完成定义第 10 项的 release-time 显式断言。
 # 阈值由 P8.3 冻结；上调阈值必须独立 commit + CHANGELOG + ADR，不允许在 release-prep 阶段
 # 临时上调来掩盖回归。LOC 不设硬阈值，只回显趋势值供 release notes 记录。
-NOX_SIZE_CAP_CLI=${NOX_SIZE_CAP_CLI:-4194304}        # 4 MiB; current baseline ~1.6 MiB
-NOX_SIZE_CAP_CORE=${NOX_SIZE_CAP_CORE:-2621440}      # 2.5 MiB; current baseline ~1.0 MiB
+NOX_SIZE_CAP_CLI=${NOX_SIZE_CAP_CLI:-2883584}        # 2.75 MiB; ADR 0025 recalibrates after observability/schema growth
+NOX_SIZE_CAP_CORE=${NOX_SIZE_CAP_CORE:-1572864}      # 1.5 MiB; current baseline ~1.0 MiB (tightened from 2.5 MiB at v0.0.3 post-release)
 run_gate "small-footprint guardrail: release build" cargo build --release -p nox -p nox_core
 run_gate "small-footprint guardrail: CLI binary size cap" env CAP="$NOX_SIZE_CAP_CLI" sh -eu -c '
 size=$(wc -c < target/release/nox)
@@ -157,9 +209,9 @@ printf "small-footprint guardrail: workspace Rust LOC = %s\n" "$loc"
 
 # Standard-library surface guardrail (P8.5, PLAN 完成定义第 12 项后半).
 # Type-checks tests/fixtures/stdlib-surface.nox; if any std module or global
-# stdlib entry (fs/env/time/net/async/math/string) is silently removed or has
+# stdlib entry (fs/env/time/net/async/math/string/json/csv/tsv/array/map/option/result) is silently removed or has
 # its signature changed, this gate fails.
-run_gate "stdlib surface guardrail: 7-class entries" "$NOX_BIN" check tests/fixtures/stdlib-surface.nox
+run_gate "stdlib surface guardrail: stdlib entries" "$NOX_BIN" check tests/fixtures/stdlib-surface.nox
 
 # Practical-use guardrail (P8.5, PLAN 完成定义第 12 项后半).
 # Drives a real-world sample project that is not the scoreboard calculator,

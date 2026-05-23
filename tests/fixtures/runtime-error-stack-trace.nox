@@ -1,0 +1,9 @@
+fn divide(value: int) -> int {
+    return value / 0;
+}
+
+fn wrapper(value: int) -> int {
+    return divide(value);
+}
+
+wrapper(1);

@@ -1,0 +1,35 @@
+// Stage 33 benchmark: permissioned host stdlib path over filesystem helpers.
+// The CLI grants filesystem read by default; other dangerous capabilities stay off.
+
+import "std/fs.nox" as fs;
+import "std/string.nox" as string;
+
+fn scan(count: int) -> int {
+    let i: int = 0;
+    let hits: int = 0;
+    while (i < count) {
+        let text: str = fs.read_text("tests/benchmarks/bench-host-data.txt");
+        if (string.contains(text, "nox-host-bench")) {
+            hits = hits + 1;
+        }
+
+        let listed: result[[str], str] = fs.list_dir("tests/benchmarks");
+        match (listed) {
+            ok(entries) => {
+                if (len(entries) > 0) {
+                    hits = hits + 1;
+                }
+            }
+            err(_) => {}
+        }
+        i = i + 1;
+    }
+    return hits;
+}
+
+let hits: int = scan(100);
+if (hits == 200) {
+    "host-capabilities-ok";
+} else {
+    "host-capabilities-bad";
+}

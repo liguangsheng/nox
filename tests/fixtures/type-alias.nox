@@ -1,0 +1,12 @@
+type UserId = int;
+type Pair = (UserId, str);
+
+fn extract(pair: Pair) -> UserId {
+    let (id, label) = pair;
+    if (label == "ok") {
+        return id;
+    }
+    return 0;
+}
+
+extract((42, "ok"));

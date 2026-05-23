@@ -68,7 +68,7 @@ permissions = ["filesystem.read"]
   `..` 逃逸项目根，重复目录会被拒绝。`nox test` 无显式路径时
   优先递归发现这些目录下的 `*_test.nox`；未配置时回退到 `source_dirs`，再回退到项目根。
 - `runtime.permissions`：可选字符串数组。允许值为 `filesystem.read`、`filesystem.write`、
-  `network`、`timers`、`environment`、`async_tasks`。这些值只声明项目期望能力，不会让
+  `network`、`timers`、`environment`、`async_tasks`、`process_run`。这些值只声明项目期望能力，不会让
   CLI 或宿主自动授予权限，也不会配置文件系统 allowlist。宿主仍需要用
   `RuntimePermissions` 显式授予能力和路径 root。
 
@@ -76,6 +76,9 @@ permissions = ["filesystem.read"]
 
 - manifest 解析器只接受字符串和字符串数组值。其他 TOML 类型（数字、表、
   内联表、布尔）当前都不支持，遇到时返回诊断。
+- manifest schema 是封闭的：只支持 `[package]`、`[entrypoints]`、`[modules]`、
+  `[runtime]` 四个 section；`[package]`、`[modules]`、`[runtime]` 中未知 key 会返回
+  `manifest.invalid`。`[entrypoints]` 允许除 `main` 之外的命名入口。
 - `[package]` 必须包含 `name` 和 `version`；`description` 可选。
 - `[entrypoints]` 中所有键都必须是字符串。`main` 是默认入口，其他键作为命名入口保留。
 - `[modules]` 中 `source_dirs` 和 `test_dirs` 都必须是字符串数组，路径必须留在项目根内且

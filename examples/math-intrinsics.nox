@@ -1,0 +1,19 @@
+let total: float = abs(-4.0)
+    + min(2.0, 3.0)
+    + max(2.0, 3.0)
+    + pow(2.0, 3.0)
+    + floor(1.9)
+    + ceil(1.1)
+    + round(1.6)
+    + log(e())
+    + log2(8.0)
+    + sin(0.0)
+    + cos(0.0)
+    + tan(0.0)
+    + pi();
+
+if (total > 30.14 && total < 30.15) {
+    "math-ok";
+} else {
+    "math-bad";
+}

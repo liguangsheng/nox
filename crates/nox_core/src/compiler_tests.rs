@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn lexes_keywords_literals_and_spans() {
     let tokens =
-        lex("export record User { name: str, } let answer: int = 42; answer.name; true && false || true; for i in 0..3 {} match (answer) { 42 => {} _ => {} } [1]").unwrap();
+        lex("export record User { name: str, } let answer: int = 42; answer.name; true && false || true; for i in 0..3 {} match (answer) { 42 => {} _ => {} } [1]?").unwrap();
     assert_eq!(tokens[0].kind, TokenKind::Export);
     assert!(tokens.iter().any(|token| token.kind == TokenKind::Record));
     assert!(tokens
@@ -24,6 +24,7 @@ fn lexes_keywords_literals_and_spans() {
     assert!(tokens.iter().any(|token| token.kind == TokenKind::Match));
     assert!(tokens.iter().any(|token| token.kind == TokenKind::FatArrow));
     assert!(tokens.iter().any(|token| token.kind == TokenKind::DotDot));
+    assert!(tokens.iter().any(|token| token.kind == TokenKind::Question));
     assert!(tokens
         .iter()
         .any(|token| token.kind == TokenKind::LeftBracket));
@@ -42,9 +43,112 @@ fn lexes_string_escape_sequences() {
 }
 
 #[test]
+fn lexes_interpolated_string_parts_and_escaped_dollar() {
+    let tokens = lex(r#""name=${name}, price=\${price}, count=${count + 1}";"#).unwrap();
+    let TokenKind::InterpolatedString(parts) = &tokens[0].kind else {
+        panic!("expected interpolated string token");
+    };
+    assert_eq!(parts.len(), 4);
+    assert_eq!(parts[0].text, "name=");
+    assert_eq!(parts[1].expression.as_deref(), Some("name"));
+    assert_eq!(parts[2].text, ", price=${price}, count=");
+    assert_eq!(parts[3].expression.as_deref(), Some("count + 1"));
+}
+
+#[test]
+fn lexes_nested_interpolation_string_escape_at_utf8_boundary() {
+    let tokens = lex("\"outer ${\"inner \\ى\"}\";").unwrap();
+    let TokenKind::InterpolatedString(parts) = &tokens[0].kind else {
+        panic!("expected interpolated string token");
+    };
+    assert_eq!(parts[1].expression.as_deref(), Some("\"inner \\ى\""));
+}
+
+#[test]
+fn parser_rejects_deep_unary_expression_without_panicking() {
+    let source = format!("{}1;", "~".repeat(200));
+    let tokens = lex(&source).unwrap();
+    let err = parse(tokens).unwrap_err();
+
+    assert_eq!(err.code, "parse.nesting-depth");
+}
+
+#[test]
+fn lexer_string_extended_handles_multiline_and_raw_strings() {
+    let tokens = lex("\"\"\"line one\nline two\"\"\" r\"raw\\n${name}\"").unwrap();
+    assert_eq!(
+        tokens[0].kind,
+        TokenKind::String("line one\nline two".to_string())
+    );
+    assert_eq!(
+        tokens[1].kind,
+        TokenKind::String(r"raw\n${name}".to_string())
+    );
+}
+
+#[test]
+fn lexer_string_extended_rejects_unterminated_extended_strings() {
+    let err = lex("\"\"\"open").unwrap_err();
+    assert!(err.message.contains("unterminated multiline string"));
+
+    let err = lex("r\"open").unwrap_err();
+    assert!(err.message.contains("unterminated raw string"));
+}
+
+#[test]
+fn lexer_character_literals_lower_to_strings() {
+    let tokens = lex(r#"'A' '界' '\n' '\'' '\\'"#).unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::String("A".to_string()));
+    assert_eq!(tokens[1].kind, TokenKind::String("界".to_string()));
+    assert_eq!(tokens[2].kind, TokenKind::String("\n".to_string()));
+    assert_eq!(tokens[3].kind, TokenKind::String("'".to_string()));
+    assert_eq!(tokens[4].kind, TokenKind::String("\\".to_string()));
+}
+
+#[test]
+fn lexer_character_literals_reject_invalid_shapes() {
+    for source in ["''", "'ab'", "'\\r'", "'open", "'\n'"] {
+        let err = lex(source).unwrap_err();
+        assert_eq!(err.code, "lex.invalid-character");
+    }
+}
+
+#[test]
+fn lexer_integer_literal_radices_and_separators() {
+    let tokens = lex("0xff 0b1010 0o17 1_000_000").unwrap();
+    assert_eq!(tokens[0].kind, TokenKind::Int(255));
+    assert_eq!(tokens[1].kind, TokenKind::Int(10));
+    assert_eq!(tokens[2].kind, TokenKind::Int(15));
+    assert_eq!(tokens[3].kind, TokenKind::Int(1_000_000));
+}
+
+#[test]
+fn lexer_integer_literal_rejects_malformed_inputs() {
+    for source in ["0x", "0b102", "0o18", "1__0", "1_"] {
+        let err = lex(source).unwrap_err();
+        assert_eq!(err.code, "lex.invalid-integer");
+    }
+}
+
+#[test]
 fn rejects_unsupported_string_escape() {
     let err = lex(r#""bad \r";"#).unwrap_err();
     assert!(err.message.contains("unsupported escape sequence '\\r'"));
+}
+
+#[test]
+fn rejects_invalid_string_interpolation_placeholder() {
+    let err = lex(r#""bad ${}";"#).unwrap_err();
+    assert_eq!(err.code, "string.interpolation");
+    assert!(err
+        .message
+        .contains("string interpolation placeholder cannot be empty"));
+
+    let err = lex(r#""bad ${name"#).unwrap_err();
+    assert_eq!(err.code, "string.interpolation");
+    assert!(err
+        .message
+        .contains("unterminated string interpolation placeholder"));
 }
 
 #[test]
@@ -163,7 +267,7 @@ fn bytecode_verifier_rejects_map_stack_underflow() {
     let module = BytecodeModule {
         instructions: vec![bytecode::Instruction::Map {
             value_type: Type::Int,
-            entry_count: 1,
+            entries: vec![bytecode::MapInstructionEntry::Entry],
             span: Span { start: 0, end: 0 },
         }],
     };
@@ -225,6 +329,7 @@ fn bytecode_verifier_rejects_malformed_nested_function_body() {
     let module = BytecodeModule {
         instructions: vec![bytecode::Instruction::Function {
             name: "bad".to_string(),
+            type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Null,
             body: BytecodeModule {

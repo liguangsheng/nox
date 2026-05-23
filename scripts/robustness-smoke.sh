@@ -90,7 +90,11 @@ done
 for file in \
     "$ROOT/tests/malformed/type-mismatch.nox" \
     "$ROOT/tests/malformed/namespace-missing-member.nox" \
-    "$ROOT/tests/malformed/deep-record-map.nox"
+    "$ROOT/tests/malformed/deep-record-map.nox" \
+    "$ROOT/tests/malformed/stdlib-string-bad-call.nox" \
+    "$ROOT/tests/malformed/stdlib-array-bad-call.nox" \
+    "$ROOT/tests/malformed/stdlib-process-exit-bad-type.nox" \
+    "$ROOT/tests/malformed/stdlib-path-misspelled.nox"
 do
     file_name=$(basename "$file")
     run_expect_status "check:$file_name" 1 "$NOX_BIN" check "$file"

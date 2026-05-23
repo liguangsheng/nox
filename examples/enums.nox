@@ -1,0 +1,22 @@
+enum LoadState {
+    Loading,
+    Ready(int),
+    Failed(str),
+}
+
+fn describe(state: LoadState) -> str {
+    match (state) {
+        Loading => {
+            return "loading";
+        }
+        Ready(value) => {
+            return "ready:${value}";
+        }
+        Failed(message) => {
+            return "failed:" + message;
+        }
+    }
+    return "unreachable";
+}
+
+describe(LoadState.Ready(42));

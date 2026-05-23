@@ -127,6 +127,17 @@ else
     fail "PLAN 第 11 项: bench-smoke per-case budget missing"
 fi
 
+if [ -d fuzz/fuzz_targets ] \
+    && grep -q "NOX_RELEASE_GATE_FUZZ" scripts/release-gate.sh \
+    && [ -f scripts/sanitizer-smoke.sh ] \
+    && grep -q "NOX_RELEASE_GATE_SANITIZER" scripts/release-gate.sh \
+    && [ -d crates/nox_core/benches ] \
+    && grep -q "NOX_BENCH_CRITERION" scripts/bench-smoke.sh; then
+    pass "PLAN 第 6 项扩展证据: fuzz / sanitizer / criterion optional gates wired"
+else
+    note "PLAN 第 6 项扩展证据: fuzz / sanitizer / criterion optional gates incomplete or not present"
+fi
+
 if grep -q "NOX_EMBEDDING_TIME_BUDGET" scripts/release-gate.sh; then
     pass "PLAN 第 12 项前半: embedding regression time budget wired"
 else

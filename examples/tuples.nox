@@ -1,0 +1,15 @@
+record Point {
+    x: int,
+    y: int,
+}
+
+let pair: (int, str) = (41, "tuple");
+let (count, label) = pair;
+let point: Point = Point { x: 20, y: 22 };
+let { x, y } = point;
+
+if (label == "tuple" && count + 1 == 42 && x + y == 42) {
+    "tuples-ok";
+} else {
+    "tuples-bad";
+}

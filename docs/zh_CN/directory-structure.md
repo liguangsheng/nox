@@ -202,7 +202,8 @@ tests/
 
 - `tests/fixtures/`：CLI、parser、type checker、runtime、formatter 和 `nox test` 使用的固定输入。
 - `tests/malformed/`：panic-free robustness smoke corpus，覆盖 lexer、parser、formatter、type checker、module resolver、manifest 和 LSP 的坏输入边界。
-- `tests/benchmarks/`：benchmark smoke 输入，覆盖递归、循环、容器、模块和 test runner。
+- `tests/benchmarks/`：benchmark smoke 输入，覆盖递归、循环、容器、模块、lambda、
+  permissioned host helper 和 test runner。
 
 ## 生成目录和本地工具
 

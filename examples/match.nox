@@ -13,12 +13,21 @@ match (code) {
     }
 }
 
+match (code) {
+    0..10 => {
+        label = label + "-range";
+    }
+    _ => {
+        label = label + "-other";
+    }
+}
+
 let suffix: str = "";
 match (label) {
-    "one" => {
+    "one-range" => {
         suffix = "-1";
     }
-    "two" => {
+    "two-range" => {
         suffix = "-2";
     }
     _ => {
@@ -26,4 +35,18 @@ match (label) {
     }
 }
 
-label + suffix;
+let nested: option[option[int]] = some(some(2));
+let nested_label: str = "";
+match (nested) {
+    some(some(value)) => {
+        nested_label = "-nested-" + to_str_int(value);
+    }
+    some(none) => {
+        nested_label = "-nested-none";
+    }
+    none => {
+        nested_label = "-none";
+    }
+}
+
+label + suffix + nested_label;

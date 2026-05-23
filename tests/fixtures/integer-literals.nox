@@ -1,0 +1,6 @@
+let hex: int = 0xff;
+let binary: int = 0b1010;
+let octal: int = 0o17;
+let separated: int = 1_000_000;
+
+hex + binary + octal + separated;

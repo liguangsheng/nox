@@ -40,6 +40,9 @@ fn c_abi_enum_values_are_stable() {
     assert_eq!(NoxCoreValueKind::Record as i32, 8);
     assert_eq!(NoxCoreValueKind::Option as i32, 9);
     assert_eq!(NoxCoreValueKind::Result as i32, 10);
+    assert_eq!(NoxCoreValueKind::Json as i32, 11);
+    assert_eq!(NoxCoreValueKind::Tuple as i32, 12);
+    assert_eq!(NoxCoreValueKind::Enum as i32, 13);
 }
 
 #[test]
@@ -182,6 +185,13 @@ fn host_callback_panic_becomes_diagnostic_and_engine_remains_reusable() {
     assert!(err.message.contains("host function 'panic_host'"));
     assert!(err.message.contains("host callback panicked"));
     assert!(err.message.contains("host exploded"));
+    assert!(
+        err.stack_frames
+            .iter()
+            .any(|f| f.name == "panic_host" && f.kind == StackFrameKind::Host),
+        "host callback frame must be tagged as Host: {:?}",
+        err.stack_frames
+    );
 
     let value = engine.eval("1 + 1;").unwrap();
     assert_eq!(value, Value::Int(2));
@@ -362,6 +372,50 @@ fn c_abi_engine_userdata_is_used_when_callback_ctx_is_null() {
 }
 
 #[test]
+fn c_abi_extended_host_registration_records_metadata() {
+    let mut engine = c_engine();
+    let mut offset = 40_i64;
+    let name = std::ffi::CString::new("math__add_offset").unwrap();
+    let docstring = std::ffi::CString::new("Adds the configured host offset.").unwrap();
+    let capability = std::ffi::CString::new("host.math").unwrap();
+    let capabilities = [capability.as_ptr()];
+    let params = [NoxCoreValueKind::Int];
+
+    let status = unsafe {
+        nox_core_engine_register_host_function_ex(
+            &mut engine,
+            name.as_ptr(),
+            params.as_ptr(),
+            params.len(),
+            NoxCoreValueKind::Int,
+            Some(c_host_add_userdata),
+            (&mut offset as *mut i64).cast::<c_void>(),
+            docstring.as_ptr(),
+            capabilities.as_ptr(),
+            capabilities.len(),
+        )
+    };
+    assert_eq!(status, NoxCoreStatus::Ok);
+
+    let signature = engine
+        .engine
+        .host_function_signature("math__add_offset")
+        .unwrap();
+    assert_eq!(
+        signature.docstring.as_deref(),
+        Some("Adds the configured host offset.")
+    );
+    assert_eq!(signature.capabilities, vec!["host.math".to_string()]);
+
+    let source = std::ffi::CString::new("math__add_offset(2);").unwrap();
+    let mut out = NoxCoreValue::default();
+    let status = unsafe { nox_core_engine_eval(&mut engine, source.as_ptr(), &mut out as *mut _) };
+    assert_eq!(status, NoxCoreStatus::Ok);
+    assert_eq!(out.kind, NoxCoreValueKind::Int);
+    assert_eq!(out.int_value, 42);
+}
+
+#[test]
 fn c_abi_callback_error_sets_last_error_with_host_name() {
     let mut engine = c_engine();
     let name = std::ffi::CString::new("fail").unwrap();
@@ -477,6 +531,22 @@ fn c_abi_reads_compound_values() {
     assert_eq!(value.kind, NoxCoreValueKind::Int);
     assert_eq!(value.int_value, 42);
     unsafe { nox_core_record_free(record.record_handle) };
+
+    let source = std::ffi::CString::new(
+        r#"
+        enum LoadState {
+            Loading,
+            Ready(int),
+        }
+        let state: LoadState = LoadState.Ready(42);
+        state;
+        "#,
+    )
+    .unwrap();
+    let mut enum_value = NoxCoreValue::default();
+    let status = unsafe { nox_core_engine_eval(&mut engine, source.as_ptr(), &mut enum_value) };
+    assert_eq!(status, NoxCoreStatus::Ok);
+    assert_eq!(enum_value.kind, NoxCoreValueKind::Enum);
 }
 
 #[test]

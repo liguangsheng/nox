@@ -49,6 +49,7 @@ pub enum RuntimePermissionDecl {
     Timers,
     Environment,
     AsyncTasks,
+    ProcessRun,
 }
 
 impl Manifest {
@@ -96,6 +97,7 @@ impl Manifest {
 
     pub fn parse(source: &str, root: PathBuf) -> Result<Manifest, Diagnostic> {
         let document = parse_toml(source)?;
+        validate_manifest_schema(&document)?;
 
         let package = document
             .section("package")
@@ -193,6 +195,7 @@ fn parse_runtime_permission(value: &str) -> Result<RuntimePermissionDecl, Diagno
         "timers" => Ok(RuntimePermissionDecl::Timers),
         "environment" => Ok(RuntimePermissionDecl::Environment),
         "async_tasks" => Ok(RuntimePermissionDecl::AsyncTasks),
+        "process_run" => Ok(RuntimePermissionDecl::ProcessRun),
         _ => Err(manifest_error(format!(
             "manifest key 'runtime.permissions' contains unknown permission '{value}'"
         ))),
@@ -201,6 +204,48 @@ fn parse_runtime_permission(value: &str) -> Result<RuntimePermissionDecl, Diagno
 
 fn manifest_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(message, Span { start: 0, end: 0 }).with_code("manifest.invalid")
+}
+
+fn validate_manifest_schema(document: &TomlDocument) -> Result<(), Diagnostic> {
+    for section in &document.sections {
+        match section.name.as_str() {
+            "package" => validate_known_keys(
+                section,
+                &["name", "version", "description"],
+                "manifest section [package]",
+            )?,
+            "entrypoints" => {}
+            "modules" => validate_known_keys(
+                section,
+                &["source_dirs", "test_dirs"],
+                "manifest section [modules]",
+            )?,
+            "runtime" => {
+                validate_known_keys(section, &["permissions"], "manifest section [runtime]")?
+            }
+            name => {
+                return Err(manifest_error(format!(
+                    "manifest section [{name}] is not supported"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_known_keys(
+    section: &TomlSection,
+    allowed: &[&str],
+    label: &str,
+) -> Result<(), Diagnostic> {
+    for (key, _) in &section.entries {
+        if !allowed.iter().any(|allowed_key| allowed_key == key) {
+            return Err(manifest_error(format!(
+                "{label} contains unsupported key '{key}'"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn validate_relative_paths(key: &str, values: Vec<String>) -> Result<Vec<PathBuf>, Diagnostic> {
@@ -704,6 +749,36 @@ permissions = ["shell"]
         let err = Manifest::parse(source, root()).unwrap_err();
         assert_eq!(err.code, "manifest.invalid");
         assert!(err.message.contains("unknown permission 'shell'"));
+    }
+
+    #[test]
+    fn rejects_unknown_manifest_section() {
+        let source = r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[schema]
+version = "1"
+"#;
+        let err = Manifest::parse(source, root()).unwrap_err();
+        assert_eq!(err.code, "manifest.invalid");
+        assert!(err.message.contains("section [schema] is not supported"));
+    }
+
+    #[test]
+    fn rejects_unknown_manifest_key() {
+        let source = r#"
+[package]
+name = "demo"
+version = "0.0.1"
+license = "MIT"
+"#;
+        let err = Manifest::parse(source, root()).unwrap_err();
+        assert_eq!(err.code, "manifest.invalid");
+        assert!(err
+            .message
+            .contains("manifest section [package] contains unsupported key 'license'"));
     }
 
     #[test]

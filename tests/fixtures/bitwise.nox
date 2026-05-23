@@ -1,0 +1,8 @@
+let value: int = (5 & 3) + (4 | 1) + (6 ^ 3) + (1 << 4) + (16 >> 2) + (~0);
+let shifted: int = -8 >> 1;
+
+if (value + shifted == 26) {
+    "bitwise-ok";
+} else {
+    "bitwise-bad";
+}

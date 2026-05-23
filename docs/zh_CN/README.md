@@ -10,6 +10,7 @@
 - [CLI](cli.md)：`nox run/check/test/fmt/lsp/inspect-bytecode` 的行为、退出码和诊断格式。
 - [诊断 code](diagnostics.md)：CLI JSON 和 LSP diagnostics 的机器可读 code 契约。
 - [运行时](runtime.md)：默认标准库、权限模型、文件加载、异步任务和取消执行。
+- [标准库索引](stdlib-index.md)：按主题归类的 stdlib 模块和稳定性标签。
 - [嵌入](embedding.md)：Rust API、C ABI、宿主函数、错误字符串和内存所有权。
 - [开发](development.md)：验证命令、测试分布和日常修改规则。
 - [Option / Result 实施计划](option-result-implementation-plan.md)：v0.0.4-dev

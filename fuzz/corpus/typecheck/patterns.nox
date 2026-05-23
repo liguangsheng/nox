@@ -1,0 +1,10 @@
+enum MaybeInt {
+    Empty,
+    Value(int),
+}
+
+let item: MaybeInt = MaybeInt.Value(42);
+match item {
+    MaybeInt.Empty => { 0; }
+    MaybeInt.Value(value) => { value; }
+}

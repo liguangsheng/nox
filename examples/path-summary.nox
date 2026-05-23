@@ -1,0 +1,14 @@
+import "std/path.nox" as path;
+
+let target: str = path.normalize(path.join("logs", "../data/report.txt"));
+
+if (
+    target == "data/report.txt" &&
+    path.basename(target) == "report.txt" &&
+    path.dirname(target) == "data" &&
+    path.extension(target) == "txt"
+) {
+    "path-ok";
+} else {
+    "path-bad";
+}

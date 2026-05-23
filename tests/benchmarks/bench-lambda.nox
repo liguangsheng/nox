@@ -1,0 +1,21 @@
+// Stage 23-32 benchmark: lambda + by-value capture + higher-order helper hot path.
+// Closure capture is exercised by the `factor` binding closed over by the lambda.
+
+fn apply(f: fn(int) -> int, n: int) -> int {
+    let total: int = 0;
+    let i: int = 0;
+    while (i < n) {
+        total = total + f(i);
+        i = i + 1;
+    }
+    return total;
+}
+
+let factor: int = 3;
+let scale: fn(int) -> int = fn(x: int) -> int { return x * factor; };
+let answer: int = apply(scale, 5000);
+if (answer == 37492500) {
+    "lambda-ok";
+} else {
+    "lambda-bad";
+}

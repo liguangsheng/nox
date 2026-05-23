@@ -1,0 +1,39 @@
+import "std/csv.nox" as csv;
+import "std/tsv.nox" as tsv;
+
+let csv_row: result[[str], str] = csv.parse_line("name,\"typed, runtime\",42");
+let tsv_row: result[[str], str] = tsv.parse_line("name\ttyped runtime\t42");
+
+match (csv_row) {
+    ok(csv_fields) => {
+        match (tsv_row) {
+            ok(tsv_fields) => {
+                let formatted_csv: str = csv.format_row(csv_fields);
+                let formatted_tsv: result[str, str] = tsv.format_row(tsv_fields);
+                match (formatted_tsv) {
+                    ok(tsv_text) => {
+                        if (
+                            len(csv_fields) == 3 &&
+                            csv_fields[1] == "typed, runtime" &&
+                            formatted_csv == "name,\"typed, runtime\",42" &&
+                            tsv_text == "name\ttyped runtime\t42"
+                        ) {
+                            "delimited-ok";
+                        } else {
+                            "delimited-bad";
+                        }
+                    }
+                    err(message) => {
+                        message;
+                    }
+                }
+            }
+            err(message) => {
+                message;
+            }
+        }
+    }
+    err(message) => {
+        message;
+    }
+}

@@ -1,0 +1,15 @@
+record Point {
+    x: int,
+    y: int,
+}
+
+let pair: (int, str) = (20, "two");
+let (count, label) = pair;
+let point: Point = Point { x: 21, y: 21 };
+let { x, y } = point;
+
+if (count == 20 && label == "two" && x + y == 42) {
+    "tuple-destructuring-ok";
+} else {
+    "tuple-destructuring-bad";
+}

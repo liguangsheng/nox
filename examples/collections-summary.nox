@@ -1,0 +1,22 @@
+import "std/array.nox" as array;
+import "std/map.nox" as map;
+
+let counts: map[str, int] = {"api": 2, "worker": 1};
+let updated: map[str, int] = map.merge(counts, {"api": map.get_or(counts, "api", 0) + 1});
+let entries: [(str, int)] = map.entries(updated);
+let sorted_values: [int] = array.sort_copy_int(map.values(updated));
+let reversed_values: [int] = array.reverse_copy(sorted_values);
+
+let first_entry: (str, int) = entries[0];
+let (first_key, first_value) = first_entry;
+
+if (
+    len(entries) == 2 &&
+    first_key == "api" &&
+    first_value == 3 &&
+    reversed_values[0] == 3
+) {
+    "summary-ok";
+} else {
+    "summary-bad";
+}

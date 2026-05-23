@@ -1,0 +1,20 @@
+enum LoadState {
+    Loading,
+    Ready(int),
+    Failed(str),
+}
+
+let state: LoadState = LoadState.Ready(42);
+let label: str = "";
+match (state) {
+    Loading => {
+        label = "loading";
+    }
+    Ready(value) => {
+        label = "ready:${value}";
+    }
+    Failed(message) => {
+        label = "failed:" + message;
+    }
+}
+label;
