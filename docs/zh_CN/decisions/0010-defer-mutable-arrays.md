@@ -4,6 +4,10 @@
 - 日期：2026-05-21
 - 涉及：语言 / 堆 / ABI
 
+本文是历史 ADR。当前数组 / map 显式 mutation 已按
+[0018 - 重启可变集合与 slice 设计](0018-restart-mutable-collections-and-slice.md)
+落地；C ABI handle 仍保持只读。
+
 ## 背景
 
 Nox 当前数组是构造后不可变的 `[T]` 值：

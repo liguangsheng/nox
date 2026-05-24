@@ -15,13 +15,13 @@ jobs:
     name: cargo fmt / test / clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install stable toolchain
         run: |
           rustup toolchain install stable --profile minimal --component rustfmt --component clippy
           rustup override set stable
       - name: Cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -41,13 +41,13 @@ jobs:
     name: C embedding smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install stable toolchain
         run: |
           rustup toolchain install stable --profile minimal
           rustup override set stable
       - name: Cargo cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -63,11 +63,31 @@ jobs:
              -o target/debug/nox_c_embedding
           target/debug/nox_c_embedding
 
+  cross_cli:
+    name: Cross CLI smoke (x86_64 musl)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup override set stable
+      - name: Cargo cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-cross-cli-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+      - name: Build and smoke x86_64-unknown-linux-musl CLI
+        run: scripts/cross-cli-smoke.sh
+
   markdown_links:
     name: Markdown local link check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Run local link checker
         run: |
           python3 - <<'PY'

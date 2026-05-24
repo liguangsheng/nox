@@ -5,6 +5,7 @@ use std::{
     io::Read,
     net::{TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
+    process::Command,
     rc::Rc,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -19,7 +20,15 @@ pub mod dap;
 pub mod lsp;
 pub mod manifest;
 
-use manifest::Manifest;
+use manifest::{validate_lockfile_for_manifest, Lockfile, Manifest};
+
+#[derive(Debug, Clone)]
+pub(crate) struct ExternalModuleDependency {
+    name: String,
+    cache_path: PathBuf,
+    resolved: String,
+    content_hash: String,
+}
 
 #[derive(Default)]
 pub struct Runtime {
@@ -52,6 +61,12 @@ pub enum RuntimeTraceValue {
 pub struct RuntimeTraceEvent {
     pub event: String,
     pub fields: BTreeMap<String, RuntimeTraceValue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncTaskPoll {
+    Pending,
+    Ready,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -156,6 +171,7 @@ pub struct MockNetwork {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MockHttpResponse {
     pub status: i64,
+    pub headers: BTreeMap<String, String>,
     pub body: Vec<u8>,
 }
 
@@ -179,6 +195,23 @@ impl MockNetwork {
         self.with_http_binary_response(method, url, status, body.into().into_bytes())
     }
 
+    pub fn with_http_text_response_headers(
+        self,
+        method: impl Into<String>,
+        url: impl Into<String>,
+        status: i64,
+        headers: BTreeMap<String, String>,
+        body: impl Into<String>,
+    ) -> Self {
+        self.with_http_binary_response_headers(
+            method,
+            url,
+            status,
+            headers,
+            body.into().into_bytes(),
+        )
+    }
+
     pub fn with_http_binary_response(
         mut self,
         method: impl Into<String>,
@@ -186,9 +219,25 @@ impl MockNetwork {
         status: i64,
         body: Vec<u8>,
     ) -> Self {
+        self = self.with_http_binary_response_headers(method, url, status, BTreeMap::new(), body);
+        self
+    }
+
+    pub fn with_http_binary_response_headers(
+        mut self,
+        method: impl Into<String>,
+        url: impl Into<String>,
+        status: i64,
+        headers: BTreeMap<String, String>,
+        body: Vec<u8>,
+    ) -> Self {
         self.http_responses.insert(
             (method.into().to_ascii_uppercase(), url.into()),
-            MockHttpResponse { status, body },
+            MockHttpResponse {
+                status,
+                headers: normalize_http_headers(headers),
+                body,
+            },
         );
         self
     }
@@ -288,36 +337,76 @@ export fn try_read_text(path: str) -> result[str, str] {
     return __nox_std_fs_try_read_text(path);
 }
 
+export async fn read_text_async(path: str) -> str {
+    return read_text(path);
+}
+
+export async fn try_read_text_async(path: str) -> result[str, str] {
+    return try_read_text(path);
+}
+
 export fn exists(path: str) -> bool {
     return __nox_std_fs_exists(path);
+}
+
+export async fn exists_async(path: str) -> bool {
+    return exists(path);
 }
 
 export fn is_file(path: str) -> bool {
     return __nox_std_fs_is_file(path);
 }
 
+export async fn is_file_async(path: str) -> bool {
+    return is_file(path);
+}
+
 export fn is_dir(path: str) -> bool {
     return __nox_std_fs_is_dir(path);
+}
+
+export async fn is_dir_async(path: str) -> bool {
+    return is_dir(path);
 }
 
 export fn list_dir(path: str) -> result[[str], str] {
     return __nox_std_fs_list_dir(path);
 }
 
+export async fn list_dir_async(path: str) -> result[[str], str] {
+    return list_dir(path);
+}
+
 export fn write_text(path: str, contents: str) -> null {
     return __nox_std_fs_write_text(path, contents);
+}
+
+export async fn write_text_async(path: str, contents: str) -> null {
+    return write_text(path, contents);
 }
 
 export fn read_binary(path: str) -> result[[int], str] {
     return __nox_std_fs_read_binary(path);
 }
 
+export async fn read_binary_async(path: str) -> result[[int], str] {
+    return read_binary(path);
+}
+
 export fn write_binary(path: str, bytes: [int]) -> result[null, str] {
     return __nox_std_fs_write_binary(path, bytes);
 }
 
+export async fn write_binary_async(path: str, bytes: [int]) -> result[null, str] {
+    return write_binary(path, bytes);
+}
+
 export fn canonicalize(path: str) -> result[str, str] {
     return __nox_std_fs_canonicalize(path);
+}
+
+export async fn canonicalize_async(path: str) -> result[str, str] {
+    return canonicalize(path);
 }
 "#
         }
@@ -720,6 +809,44 @@ export fn as_object(value: json) -> result[map[str, json], str] {
 }
 "#
         }
+        "std/jsonl.nox" => {
+            r#"import "std/json.nox" as json;
+import "std/string.nox" as string;
+
+export fn parse_lines(source: str) -> result[[json], str] {
+    let values: [json] = [];
+    let lines: [str] = string.lines(source);
+    let i: int = 0;
+    while (i < len(lines)) {
+        let line: str = lines[i];
+        let parsed: result[json, str] = json.parse(line);
+        match (parsed) {
+            ok(value) => {
+                __nox_std_array_append(values, value);
+            }
+            err(message) => {
+                return err("line ${i + 1}: " + message);
+            }
+        }
+        i = i + 1;
+    }
+    return ok(values);
+}
+
+export fn format_lines(values: [json]) -> str {
+    let out: str = "";
+    let i: int = 0;
+    while (i < len(values)) {
+        if (i > 0) {
+            out = out + "\n";
+        }
+        out = out + json.stringify(values[i]);
+        i = i + 1;
+    }
+    return out;
+}
+"#
+        }
         "std/csv.nox" => {
             r#"export fn parse_line(value: str) -> result[[str], str] {
     return __nox_std_csv_parse_line(value);
@@ -727,6 +854,14 @@ export fn as_object(value: json) -> result[map[str, json], str] {
 
 export fn format_row(values: [str]) -> str {
     return __nox_std_csv_format_row(values);
+}
+
+export fn parse_rows(value: str) -> result[[[str]], str] {
+    return __nox_std_csv_parse_rows(value);
+}
+
+export fn format_rows(values: [[str]]) -> str {
+    return __nox_std_csv_format_rows(values);
 }
 "#
         }
@@ -738,10 +873,70 @@ export fn format_row(values: [str]) -> str {
 export fn format_row(values: [str]) -> result[str, str] {
     return __nox_std_tsv_format_row(values);
 }
+
+export fn parse_rows(value: str) -> result[[[str]], str] {
+    return __nox_std_tsv_parse_rows(value);
+}
+
+export fn format_rows(values: [[str]]) -> result[str, str] {
+    return __nox_std_tsv_format_rows(values);
+}
+"#
+        }
+        "std/hash.nox" => {
+            r#"export fn sha256_hex(bytes: [int]) -> str {
+    return __nox_std_hash_sha256_hex(bytes);
+}
+
+export fn sha256_text(value: str) -> str {
+    return __nox_std_hash_sha256_text(value);
+}
+
+export fn hmac_sha256_hex(key: [int], bytes: [int]) -> str {
+    return __nox_std_hash_hmac_sha256_hex(key, bytes);
+}
+
+export fn hmac_sha256_text(key: str, value: str) -> str {
+    return __nox_std_hash_hmac_sha256_text(key, value);
+}
 "#
         }
         "std/array.nox" => {
-            r#"export fn len<T>(values: [T]) -> int {
+            r#"export trait Eq {
+    fn equals(self: Self, other: Self) -> bool;
+}
+
+impl Eq for null {
+    fn equals(self: null, other: null) -> bool {
+        return self == other;
+    }
+}
+
+impl Eq for bool {
+    fn equals(self: bool, other: bool) -> bool {
+        return self == other;
+    }
+}
+
+impl Eq for int {
+    fn equals(self: int, other: int) -> bool {
+        return self == other;
+    }
+}
+
+impl Eq for float {
+    fn equals(self: float, other: float) -> bool {
+        return self == other;
+    }
+}
+
+impl Eq for str {
+    fn equals(self: str, other: str) -> bool {
+        return self == other;
+    }
+}
+
+export fn len<T>(values: [T]) -> int {
     return __nox_std_array_len(values);
 }
 
@@ -856,6 +1051,32 @@ export fn dedupe<T: Equatable>(values: [T]) -> [T] {
     }
     return result;
 }
+
+export fn contains_equal<T: Eq>(values: [T], target: T) -> bool {
+    let i: int = 0;
+    let n: int = __nox_std_array_len(values);
+    while (i < n) {
+        if (values[i].equals(target)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+export fn dedupe_equal<T: Eq>(values: [T]) -> [T] {
+    let result: [T] = [];
+    let i: int = 0;
+    let n: int = __nox_std_array_len(values);
+    while (i < n) {
+        let element: T = values[i];
+        if (!contains_equal(result, element)) {
+            __nox_std_array_append(result, element);
+        }
+        i = i + 1;
+    }
+    return result;
+}
 "#
         }
         "std/map.nox" => {
@@ -919,6 +1140,28 @@ export fn unwrap_or<T>(value: option[T], fallback: T) -> T {
         }
     }
 }
+
+export fn map<T, U>(value: option[T], f: fn(T) -> U) -> option[U] {
+    match (value) {
+        some(payload) => {
+            return some(f(payload));
+        }
+        none => {
+            return none;
+        }
+    }
+}
+
+export fn and_then<T, U>(value: option[T], f: fn(T) -> option[U]) -> option[U] {
+    match (value) {
+        some(payload) => {
+            return f(payload);
+        }
+        none => {
+            return none;
+        }
+    }
+}
 "#
         }
         "std/result.nox" => {
@@ -937,6 +1180,39 @@ export fn unwrap_or<T, E>(value: result[T, E], fallback: T) -> T {
         }
         err(_) => {
             return fallback;
+        }
+    }
+}
+
+export fn map<T, U, E>(value: result[T, E], f: fn(T) -> U) -> result[U, E] {
+    match (value) {
+        ok(payload) => {
+            return ok(f(payload));
+        }
+        err(error) => {
+            return err(error);
+        }
+    }
+}
+
+export fn map_err<T, E, F>(value: result[T, E], f: fn(E) -> F) -> result[T, F] {
+    match (value) {
+        ok(payload) => {
+            return ok(payload);
+        }
+        err(error) => {
+            return err(f(error));
+        }
+    }
+}
+
+export fn and_then<T, U, E>(value: result[T, E], f: fn(T) -> result[U, E]) -> result[U, E] {
+    match (value) {
+        ok(payload) => {
+            return f(payload);
+        }
+        err(error) => {
+            return err(error);
         }
     }
 }
@@ -1637,6 +1913,10 @@ export fn assert_property_int_map(label: str, seed: int, cases: int, len: int, m
     return task_sleep_ms(ms);
 }
 
+export fn sleep(ms: int) -> task[null] {
+    return task_sleep(ms);
+}
+
 export fn is_ready(id: int) -> bool {
     return task_ready(id);
 }
@@ -1663,16 +1943,48 @@ export fn pending_count() -> int {
     return __nox_std_http_get(url, timeout_ms);
 }
 
+export async fn get_async(url: str, timeout_ms: int) -> result[(int, str), str] {
+    return get(url, timeout_ms);
+}
+
 export fn post(url: str, body: str, timeout_ms: int) -> result[(int, str), str] {
     return __nox_std_http_post(url, body, timeout_ms);
+}
+
+export async fn post_async(url: str, body: str, timeout_ms: int) -> result[(int, str), str] {
+    return post(url, body, timeout_ms);
+}
+
+export fn request(method: str, url: str, headers: map[str, str], body: str, timeout_ms: int) -> result[(int, map[str, str], str), str] {
+    return __nox_std_http_request(method, url, headers, body, timeout_ms);
+}
+
+export async fn request_async(method: str, url: str, headers: map[str, str], body: str, timeout_ms: int) -> result[(int, map[str, str], str), str] {
+    return request(method, url, headers, body, timeout_ms);
 }
 
 export fn get_binary(url: str, timeout_ms: int) -> result[(int, [int]), str] {
     return __nox_std_http_get_binary(url, timeout_ms);
 }
 
+export async fn get_binary_async(url: str, timeout_ms: int) -> result[(int, [int]), str] {
+    return get_binary(url, timeout_ms);
+}
+
 export fn post_binary(url: str, body: [int], timeout_ms: int) -> result[(int, [int]), str] {
     return __nox_std_http_post_binary(url, body, timeout_ms);
+}
+
+export async fn post_binary_async(url: str, body: [int], timeout_ms: int) -> result[(int, [int]), str] {
+    return post_binary(url, body, timeout_ms);
+}
+
+export fn request_binary(method: str, url: str, headers: map[str, str], body: [int], timeout_ms: int) -> result[(int, map[str, str], [int]), str] {
+    return __nox_std_http_request_binary(method, url, headers, body, timeout_ms);
+}
+
+export async fn request_binary_async(method: str, url: str, headers: map[str, str], body: [int], timeout_ms: int) -> result[(int, map[str, str], [int]), str] {
+    return request_binary(method, url, headers, body, timeout_ms);
 }
 "#
         }
@@ -1735,6 +2047,7 @@ pub(crate) fn install_lsp_stdlib(session: &mut nox_core::Session) {
     register_http_lsp_stubs(engine);
     register_test_stdlib(engine);
     register_encoding_stdlib(engine);
+    register_hash_stdlib(engine);
     register_dotenv_stdlib(engine);
     register_term_stdlib(engine);
     register_bytes_stdlib(engine);
@@ -2036,6 +2349,18 @@ pub(crate) fn install_lsp_stdlib(session: &mut nox_core::Session) {
         .expect("stdlib function registration is static");
     engine
         .register_host_function(
+            HostFunctionBuilder::new("task_sleep", Type::Task(Box::new(Type::Null)))
+                .param("ms", Type::Int),
+            |_| {
+                Err(Diagnostic::new(
+                    "LSP stdlib stubs are only available for static analysis",
+                    Span { start: 0, end: 0 },
+                ))
+            },
+        )
+        .expect("stdlib function registration is static");
+    engine
+        .register_host_function(
             HostFunctionBuilder::new("task_ready", Type::Bool).param("id", Type::Int),
             |_| {
                 Err(Diagnostic::new(
@@ -2125,6 +2450,22 @@ impl TaskRuntime {
     fn remove_tasks_created_since(&mut self, first_id: u64) {
         self.sleep_tasks.retain(|id, _| *id < first_id);
     }
+}
+
+fn async_task_capability_required(operation: &str) -> Diagnostic {
+    call_capability_required("async task", operation)
+}
+
+fn async_task_cap_exceeded(max: usize) -> Diagnostic {
+    Diagnostic::new(
+        format!("async task pending count would exceed configured cap of {max}"),
+        Span { start: 0, end: 0 },
+    )
+    .with_code("runtime.task-pending-cap")
+}
+
+fn unknown_async_task_diagnostic(message: &'static str) -> Diagnostic {
+    Diagnostic::new(message, Span { start: 0, end: 0 })
 }
 
 impl Runtime {
@@ -2218,6 +2559,45 @@ impl Runtime {
 
     pub fn pending_async_task_count(&self) -> usize {
         self.task_runtime.borrow().pending_count()
+    }
+
+    pub fn spawn_sleep_task(&mut self, duration: Duration) -> Result<u64, Diagnostic> {
+        if !self.permissions.async_tasks {
+            return Err(async_task_capability_required("spawn_sleep_task"));
+        }
+        let mut task_runtime = self.task_runtime.borrow_mut();
+        if let Some(max) = self.permissions.async_task_max_pending {
+            if task_runtime.pending_count() >= max {
+                return Err(async_task_cap_exceeded(max));
+            }
+        }
+        Ok(task_runtime.spawn_sleep(duration))
+    }
+
+    pub fn poll_async_task(&mut self, id: u64) -> Result<AsyncTaskPoll, Diagnostic> {
+        if !self.permissions.async_tasks {
+            return Err(async_task_capability_required("poll_async_task"));
+        }
+        let ready = self
+            .task_runtime
+            .borrow_mut()
+            .poll(id)
+            .map_err(unknown_async_task_diagnostic)?;
+        if ready {
+            Ok(AsyncTaskPoll::Ready)
+        } else {
+            Ok(AsyncTaskPoll::Pending)
+        }
+    }
+
+    pub fn cancel_async_task(&mut self, id: u64) -> Result<(), Diagnostic> {
+        if !self.permissions.async_tasks {
+            return Err(async_task_capability_required("cancel_async_task"));
+        }
+        self.task_runtime
+            .borrow_mut()
+            .cancel(id)
+            .map_err(unknown_async_task_diagnostic)
     }
 
     pub fn set_runtime_trace_enabled(&mut self, enabled: bool) {
@@ -2354,8 +2734,11 @@ impl Runtime {
         base: impl AsRef<Path>,
     ) -> Result<(), Vec<Diagnostic>> {
         let base = base.as_ref().to_path_buf();
-        let search_paths = manifest_search_paths(&base);
-        self.set_import_base(base, search_paths);
+        let (search_paths, external_modules) = match import_context_for_base(&base) {
+            Ok(context) => context,
+            Err(err) => return Err(vec![err]),
+        };
+        self.set_import_base_with_external(base, search_paths, external_modules);
         self.engine.check_diagnostics(source)
     }
 
@@ -2366,8 +2749,16 @@ impl Runtime {
         overlay: HashMap<PathBuf, String>,
     ) -> Result<(), Vec<Diagnostic>> {
         let base = base.as_ref().to_path_buf();
-        let search_paths = manifest_search_paths(&base);
-        self.set_import_base_with_overlay(base, search_paths, overlay);
+        let (search_paths, external_modules) = match import_context_for_base(&base) {
+            Ok(context) => context,
+            Err(err) => return Err(vec![err]),
+        };
+        self.set_import_base_with_overlay_and_external(
+            base,
+            search_paths,
+            overlay,
+            external_modules,
+        );
         self.engine.check_diagnostics(source)
     }
 
@@ -2417,8 +2808,8 @@ impl Runtime {
         base: impl AsRef<Path>,
     ) -> Result<Option<Type>, Diagnostic> {
         let base = base.as_ref().to_path_buf();
-        let search_paths = manifest_search_paths(&base);
-        self.set_import_base(base, search_paths);
+        let (search_paths, external_modules) = import_context_for_base(&base)?;
+        self.set_import_base_with_external(base, search_paths, external_modules);
         self.engine.hover_type(source, byte_offset)
     }
 
@@ -2430,8 +2821,13 @@ impl Runtime {
         overlay: HashMap<PathBuf, String>,
     ) -> Result<Option<Type>, Diagnostic> {
         let base = base.as_ref().to_path_buf();
-        let search_paths = manifest_search_paths(&base);
-        self.set_import_base_with_overlay(base, search_paths, overlay);
+        let (search_paths, external_modules) = import_context_for_base(&base)?;
+        self.set_import_base_with_overlay_and_external(
+            base,
+            search_paths,
+            overlay,
+            external_modules,
+        );
         self.engine.hover_type(source, byte_offset)
     }
 
@@ -2449,7 +2845,12 @@ impl Runtime {
             .as_ref()
             .map(Manifest::source_dirs)
             .unwrap_or_default();
-        self.set_import_base(base, search_paths);
+        let external_modules = manifest
+            .as_ref()
+            .map(external_modules_for_manifest)
+            .transpose()?
+            .unwrap_or_default();
+        self.set_import_base_with_external(base, search_paths, external_modules);
 
         let source = fs::read_to_string(path).map_err(|err| {
             Diagnostic::new(
@@ -2460,7 +2861,17 @@ impl Runtime {
         Ok(source)
     }
 
+    #[cfg(test)]
     fn set_import_base(&mut self, base: PathBuf, search_paths: Vec<PathBuf>) {
+        self.set_import_base_with_external(base, search_paths, Vec::new());
+    }
+
+    fn set_import_base_with_external(
+        &mut self,
+        base: PathBuf,
+        search_paths: Vec<PathBuf>,
+        external_modules: Vec<ExternalModuleDependency>,
+    ) {
         self.engine.set_module_loader(move |specifier| {
             if let Some(source) = std_module_source(specifier)? {
                 return Ok(source.to_string());
@@ -2475,15 +2886,19 @@ impl Runtime {
                     return read_module(&candidate);
                 }
             }
+            if let Some(source) = load_external_module(specifier, &external_modules)? {
+                return Ok(source);
+            }
             read_module(&primary)
         });
     }
 
-    fn set_import_base_with_overlay(
+    fn set_import_base_with_overlay_and_external(
         &mut self,
         base: PathBuf,
         search_paths: Vec<PathBuf>,
         overlay: HashMap<PathBuf, String>,
+        external_modules: Vec<ExternalModuleDependency>,
     ) {
         self.engine.set_module_loader(move |specifier| {
             if let Some(source) = std_module_source(specifier)? {
@@ -2505,16 +2920,190 @@ impl Runtime {
                     return read_module(&candidate);
                 }
             }
+            if let Some(source) = load_external_module(specifier, &external_modules)? {
+                return Ok(source);
+            }
             read_module(&primary)
         });
     }
 }
 
-fn manifest_search_paths(base: &Path) -> Vec<PathBuf> {
+fn import_context_for_base(
+    base: &Path,
+) -> Result<(Vec<PathBuf>, Vec<ExternalModuleDependency>), Diagnostic> {
     let probe = base.join("probe.nox");
-    match Manifest::discover(&probe) {
-        Ok(Some(manifest)) => manifest.source_dirs(),
-        _ => Vec::new(),
+    match Manifest::discover(&probe)? {
+        Some(manifest) => Ok((
+            manifest.source_dirs(),
+            external_modules_for_manifest(&manifest)?,
+        )),
+        None => Ok((Vec::new(), Vec::new())),
+    }
+}
+
+pub(crate) fn external_modules_for_manifest(
+    manifest: &Manifest,
+) -> Result<Vec<ExternalModuleDependency>, Diagnostic> {
+    if manifest.dependencies.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let validation = validate_lockfile_for_manifest(manifest);
+    if !validation.ok {
+        return Err(validation
+            .diagnostics
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| {
+                Diagnostic::new("dependency lockfile is invalid", Span { start: 0, end: 0 })
+                    .with_code("lockfile.invalid")
+            }));
+    }
+
+    let lockfile = Lockfile::load(&validation.path)?;
+    let cache_dir = default_module_cache_dir();
+    Ok(lockfile
+        .dependencies
+        .into_iter()
+        .map(|dependency| ExternalModuleDependency {
+            name: dependency.name,
+            cache_path: cache_dir.join(dependency.cache_key),
+            resolved: dependency.resolved,
+            content_hash: dependency.content_hash,
+        })
+        .collect())
+}
+
+pub(crate) fn default_module_cache_dir() -> PathBuf {
+    if let Ok(path) = env::var("NOX_MODULE_CACHE") {
+        return PathBuf::from(path);
+    }
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home)
+            .join(".cache")
+            .join("nox")
+            .join("modules");
+    }
+    env::temp_dir().join("nox").join("modules")
+}
+
+pub(crate) fn load_external_module(
+    specifier: &str,
+    dependencies: &[ExternalModuleDependency],
+) -> Result<Option<String>, Diagnostic> {
+    let Some((dependency_name, module_path)) = specifier.split_once('/') else {
+        return Ok(None);
+    };
+    let Some(dependency) = dependencies
+        .iter()
+        .find(|dependency| dependency.name == dependency_name)
+    else {
+        return Ok(None);
+    };
+    validate_external_module_path(specifier, module_path)?;
+    if !dependency.cache_path.is_dir() {
+        return Err(Diagnostic::new(
+            format!(
+                "external module dependency '{}' cache is missing at '{}'; run nox fetch",
+                dependency.name,
+                dependency.cache_path.display()
+            ),
+            Span { start: 0, end: 0 },
+        )
+        .with_code("module.cache-missing"));
+    }
+    verify_external_module_hash(dependency)?;
+    let object = format!("{}:{module_path}", dependency.resolved);
+    let source = run_git_capture(
+        &[
+            "--git-dir",
+            &dependency.cache_path.display().to_string(),
+            "show",
+            &object,
+        ],
+        None,
+    )
+    .map_err(|err| {
+        Diagnostic::new(
+            format!("failed to load external module '{specifier}': {err}"),
+            Span { start: 0, end: 0 },
+        )
+        .with_code("module.not-found")
+    })?;
+    String::from_utf8(source).map(Some).map_err(|err| {
+        Diagnostic::new(
+            format!("external module '{specifier}' is not valid UTF-8: {err}"),
+            Span { start: 0, end: 0 },
+        )
+        .with_code("module.invalid-source")
+    })
+}
+
+fn validate_external_module_path(specifier: &str, module_path: &str) -> Result<(), Diagnostic> {
+    let path = Path::new(module_path);
+    if module_path.is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(Diagnostic::new(
+            format!("invalid external module import '{specifier}'"),
+            Span { start: 0, end: 0 },
+        )
+        .with_code("module.invalid-specifier"));
+    }
+    Ok(())
+}
+
+fn verify_external_module_hash(dependency: &ExternalModuleDependency) -> Result<(), Diagnostic> {
+    let archive = run_git_capture(
+        &[
+            "--git-dir",
+            &dependency.cache_path.display().to_string(),
+            "archive",
+            "--format=tar",
+            &dependency.resolved,
+        ],
+        None,
+    )
+    .map_err(|err| {
+        Diagnostic::new(
+            format!(
+                "external module dependency '{}' cache is corrupt: {err}",
+                dependency.name
+            ),
+            Span { start: 0, end: 0 },
+        )
+        .with_code("module.cache-corrupt")
+    })?;
+    let actual = format!("sha256:{}", sha256_hex_bytes(&archive));
+    if actual != dependency.content_hash {
+        return Err(Diagnostic::new(
+            format!(
+                "external module dependency '{}' content hash mismatch: lockfile has {}, cache has {}",
+                dependency.name, dependency.content_hash, actual
+            ),
+            Span { start: 0, end: 0 },
+        )
+        .with_code("module.hash-mismatch"));
+    }
+    Ok(())
+}
+
+pub fn run_git_capture(args: &[&str], cwd: Option<&Path>) -> Result<Vec<u8>, String> {
+    let mut command = Command::new("git");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command
+        .args(args)
+        .output()
+        .map_err(|err| format!("failed to run git: {err}"))?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
     }
 }
 
@@ -3688,6 +4277,7 @@ fn install_std_module_aliases(
     register_http_stdlib(engine, permissions, mock_network);
     register_test_stdlib(engine);
     register_encoding_stdlib(engine);
+    register_hash_stdlib(engine);
     register_dotenv_stdlib(engine);
     register_ini_stdlib(engine);
     register_toml_stdlib(engine);
@@ -5014,6 +5604,189 @@ fn hex_decode_bytes(input: &str) -> Result<Vec<u8>, String> {
         out.push(((high << 4) | low) as u8);
     }
     Ok(out)
+}
+
+fn sha256_digest(input: &[u8]) -> [u8; 32] {
+    const H0: [u32; 8] = [
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
+        0x5be0cd19,
+    ];
+    const K: [u32; 64] = [
+        0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4,
+        0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe,
+        0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f,
+        0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+        0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc,
+        0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+        0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116,
+        0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+        0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7,
+        0xc67178f2,
+    ];
+
+    let mut data = input.to_vec();
+    let bit_len = (data.len() as u64) * 8;
+    data.push(0x80);
+    while data.len() % 64 != 56 {
+        data.push(0);
+    }
+    data.extend_from_slice(&bit_len.to_be_bytes());
+
+    let mut state = H0;
+    for chunk in data.chunks_exact(64) {
+        let mut words = [0u32; 64];
+        for (i, word) in words.iter_mut().take(16).enumerate() {
+            let offset = i * 4;
+            *word = u32::from_be_bytes([
+                chunk[offset],
+                chunk[offset + 1],
+                chunk[offset + 2],
+                chunk[offset + 3],
+            ]);
+        }
+        for i in 16..64 {
+            let s0 = words[i - 15].rotate_right(7)
+                ^ words[i - 15].rotate_right(18)
+                ^ (words[i - 15] >> 3);
+            let s1 = words[i - 2].rotate_right(17)
+                ^ words[i - 2].rotate_right(19)
+                ^ (words[i - 2] >> 10);
+            words[i] = words[i - 16]
+                .wrapping_add(s0)
+                .wrapping_add(words[i - 7])
+                .wrapping_add(s1);
+        }
+
+        let mut a = state[0];
+        let mut b = state[1];
+        let mut c = state[2];
+        let mut d = state[3];
+        let mut e = state[4];
+        let mut f = state[5];
+        let mut g = state[6];
+        let mut h = state[7];
+
+        for i in 0..64 {
+            let s1 = e.rotate_right(6) ^ e.rotate_right(11) ^ e.rotate_right(25);
+            let ch = (e & f) ^ ((!e) & g);
+            let temp1 = h
+                .wrapping_add(s1)
+                .wrapping_add(ch)
+                .wrapping_add(K[i])
+                .wrapping_add(words[i]);
+            let s0 = a.rotate_right(2) ^ a.rotate_right(13) ^ a.rotate_right(22);
+            let maj = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = s0.wrapping_add(maj);
+
+            h = g;
+            g = f;
+            f = e;
+            e = d.wrapping_add(temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = temp1.wrapping_add(temp2);
+        }
+
+        state[0] = state[0].wrapping_add(a);
+        state[1] = state[1].wrapping_add(b);
+        state[2] = state[2].wrapping_add(c);
+        state[3] = state[3].wrapping_add(d);
+        state[4] = state[4].wrapping_add(e);
+        state[5] = state[5].wrapping_add(f);
+        state[6] = state[6].wrapping_add(g);
+        state[7] = state[7].wrapping_add(h);
+    }
+
+    let mut out = [0u8; 32];
+    for (i, word) in state.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
+pub fn sha256_hex_bytes(input: &[u8]) -> String {
+    hex_encode_bytes(&sha256_digest(input))
+}
+
+fn hmac_sha256_digest(key: &[u8], input: &[u8]) -> [u8; 32] {
+    const BLOCK_SIZE: usize = 64;
+    let mut key_block = [0u8; BLOCK_SIZE];
+    if key.len() > BLOCK_SIZE {
+        key_block[..32].copy_from_slice(&sha256_digest(key));
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = Vec::with_capacity(BLOCK_SIZE + input.len());
+    let mut outer = Vec::with_capacity(BLOCK_SIZE + 32);
+    for byte in key_block {
+        inner.push(byte ^ 0x36);
+        outer.push(byte ^ 0x5c);
+    }
+    inner.extend_from_slice(input);
+    let inner_digest = sha256_digest(&inner);
+    outer.extend_from_slice(&inner_digest);
+    sha256_digest(&outer)
+}
+
+fn hmac_sha256_hex_bytes(key: &[u8], input: &[u8]) -> String {
+    hex_encode_bytes(&hmac_sha256_digest(key, input))
+}
+
+fn register_hash_stdlib(engine: &mut Engine) {
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new("__nox_std_hash_sha256_hex", Type::Str)
+                .param("bytes", Type::Array(Box::new(Type::Int))),
+            |args| match args {
+                [Value::Array(bytes)] => match bytes_array_to_vec(bytes) {
+                    Ok(bytes) => Ok(Value::string(sha256_hex_bytes(&bytes))),
+                    Err(message) => Err(string_argument_error_owned(message)),
+                },
+                _ => unreachable!("static checker guarantees hash.sha256_hex argument type"),
+            },
+        )
+        .expect("stdlib function registration is static");
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new("__nox_std_hash_sha256_text", Type::Str)
+                .param("value", Type::Str),
+            |args| match args {
+                [Value::String(value)] => Ok(Value::string(sha256_hex_bytes(value.as_bytes()))),
+                _ => unreachable!("static checker guarantees hash.sha256_text argument type"),
+            },
+        )
+        .expect("stdlib function registration is static");
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new("__nox_std_hash_hmac_sha256_hex", Type::Str)
+                .param("key", Type::Array(Box::new(Type::Int)))
+                .param("bytes", Type::Array(Box::new(Type::Int))),
+            |args| match args {
+                [Value::Array(key), Value::Array(bytes)] => {
+                    let key = bytes_array_to_vec(key).map_err(string_argument_error_owned)?;
+                    let bytes = bytes_array_to_vec(bytes).map_err(string_argument_error_owned)?;
+                    Ok(Value::string(hmac_sha256_hex_bytes(&key, &bytes)))
+                }
+                _ => unreachable!("static checker guarantees hash.hmac_sha256_hex argument types"),
+            },
+        )
+        .expect("stdlib function registration is static");
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new("__nox_std_hash_hmac_sha256_text", Type::Str)
+                .param("key", Type::Str)
+                .param("value", Type::Str),
+            |args| match args {
+                [Value::String(key), Value::String(value)] => Ok(Value::string(
+                    hmac_sha256_hex_bytes(key.as_bytes(), value.as_bytes()),
+                )),
+                _ => {
+                    unreachable!("static checker guarantees hash.hmac_sha256_text argument types")
+                }
+            },
+        )
+        .expect("stdlib function registration is static");
 }
 
 fn register_encoding_stdlib(engine: &mut Engine) {
@@ -6667,13 +7440,7 @@ impl Runtime {
                             let mut task_runtime = task_runtime_for_spawn.borrow_mut();
                             if let Some(max) = async_task_max_pending {
                                 if task_runtime.pending_count() >= max {
-                                    return Err(Diagnostic::new(
-                                        format!(
-                                            "async task pending count would exceed configured cap of {max}"
-                                        ),
-                                        Span { start: 0, end: 0 },
-                                    )
-                                    .with_code("runtime.task-pending-cap"));
+                                    return Err(async_task_cap_exceeded(max));
                                 }
                             }
                             let id = task_runtime.spawn_sleep(Duration::from_millis(*ms as u64));
@@ -6704,6 +7471,105 @@ impl Runtime {
             .expect("stdlib function registration is static");
 
         let async_allowed = self.permissions.async_tasks;
+        let async_task_max_pending = self.permissions.async_task_max_pending;
+        let task_runtime_for_await_spawn = task_runtime.clone();
+        let trace_task_await_spawn_events = runtime_trace_events.clone();
+        self.engine
+            .register_host_function(
+                HostFunctionBuilder::new("task_sleep", Type::Task(Box::new(Type::Null)))
+                    .param("ms", Type::Int),
+                move |args| {
+                    if !async_allowed {
+                        push_runtime_trace_event(
+                            &trace_task_await_spawn_events,
+                            "task",
+                            [
+                                (
+                                    "operation",
+                                    RuntimeTraceValue::String("spawn-awaitable".to_string()),
+                                ),
+                                ("allowed", RuntimeTraceValue::Bool(false)),
+                            ],
+                        );
+                        return Err(call_capability_required("async task", "task_sleep"));
+                    }
+
+                    match args {
+                        [Value::Int(ms)] if *ms >= 0 => {
+                            let mut task_runtime = task_runtime_for_await_spawn.borrow_mut();
+                            if let Some(max) = async_task_max_pending {
+                                if task_runtime.pending_count() >= max {
+                                    return Err(async_task_cap_exceeded(max));
+                                }
+                            }
+                            let id = task_runtime.spawn_sleep(Duration::from_millis(*ms as u64));
+                            push_runtime_trace_event(
+                                &trace_task_await_spawn_events,
+                                "task",
+                                [
+                                    (
+                                        "operation",
+                                        RuntimeTraceValue::String("spawn-awaitable".to_string()),
+                                    ),
+                                    ("allowed", RuntimeTraceValue::Bool(true)),
+                                    ("task_id", RuntimeTraceValue::UInt(id)),
+                                    ("duration_ms", RuntimeTraceValue::Int(*ms)),
+                                    (
+                                        "pending",
+                                        RuntimeTraceValue::UInt(task_runtime.pending_count() as u64),
+                                    ),
+                                ],
+                            );
+                            drop(task_runtime);
+
+                            let task_runtime_for_await = task_runtime_for_await_spawn.clone();
+                            let trace_task_await_events = trace_task_await_spawn_events.clone();
+                            Ok(Value::host_task(Type::Null, move |_span| {
+                                loop {
+                                    let mut task_runtime = task_runtime_for_await.borrow_mut();
+                                    let ready = task_runtime
+                                        .poll(id)
+                                        .map_err(unknown_async_task_diagnostic)?;
+                                    if ready {
+                                        push_runtime_trace_event(
+                                            &trace_task_await_events,
+                                            "task",
+                                            [
+                                                (
+                                                    "operation",
+                                                    RuntimeTraceValue::String(
+                                                        "await".to_string(),
+                                                    ),
+                                                ),
+                                                ("allowed", RuntimeTraceValue::Bool(true)),
+                                                ("task_id", RuntimeTraceValue::UInt(id)),
+                                                ("ready", RuntimeTraceValue::Bool(true)),
+                                                (
+                                                    "pending",
+                                                    RuntimeTraceValue::UInt(
+                                                        task_runtime.pending_count() as u64,
+                                                    ),
+                                                ),
+                                            ],
+                                        );
+                                        return Ok(Value::Null);
+                                    }
+                                    drop(task_runtime);
+                                    thread::sleep(Duration::from_millis(1));
+                                }
+                            }))
+                        }
+                        [Value::Int(_)] => Err(Diagnostic::new(
+                            "task_sleep expects a non-negative duration",
+                            Span { start: 0, end: 0 },
+                        )),
+                        _ => unreachable!("static checker guarantees task_sleep argument type"),
+                    }
+                },
+            )
+            .expect("stdlib function registration is static");
+
+        let async_allowed = self.permissions.async_tasks;
         let task_runtime_for_ready = task_runtime.clone();
         let trace_task_ready_events = runtime_trace_events.clone();
         self.engine
@@ -6727,7 +7593,7 @@ impl Runtime {
                             let mut task_runtime = task_runtime_for_ready.borrow_mut();
                             let ready = task_runtime
                                 .poll(*id as u64)
-                                .map_err(|msg| Diagnostic::new(msg, Span { start: 0, end: 0 }))?;
+                                .map_err(unknown_async_task_diagnostic)?;
                             push_runtime_trace_event(
                                 &trace_task_ready_events,
                                 "task",
@@ -6778,7 +7644,7 @@ impl Runtime {
                             let mut task_runtime = task_runtime_for_cancel.borrow_mut();
                             task_runtime
                                 .cancel(*id as u64)
-                                .map_err(|msg| Diagnostic::new(msg, Span { start: 0, end: 0 }))?;
+                                .map_err(unknown_async_task_diagnostic)?;
                             push_runtime_trace_event(
                                 &trace_task_cancel_events,
                                 "task",
@@ -6833,9 +7699,9 @@ impl Runtime {
                             };
                             loop {
                                 let mut task_runtime = task_runtime_for_join.borrow_mut();
-                                let ready = task_runtime.poll(*id as u64).map_err(|msg| {
-                                    Diagnostic::new(msg, Span { start: 0, end: 0 })
-                                })?;
+                                let ready = task_runtime
+                                    .poll(*id as u64)
+                                    .map_err(unknown_async_task_diagnostic)?;
                                 if ready {
                                     push_runtime_trace_event(
                                         &trace_task_join_events,
@@ -8347,6 +9213,7 @@ fn value_to_json(value: &Value) -> Result<JsonValue, String> {
             None => Ok(JsonValue::String(e.variant().to_string())),
         },
         Value::Function(_) => Err("function values cannot be serialized to JSON".to_string()),
+        Value::Task(_) => Err("task values cannot be serialized to JSON".to_string()),
     }
 }
 
@@ -8487,8 +9354,12 @@ fn resolve_json_path(value: &JsonValue, path: &str) -> Result<JsonValue, String>
 fn register_delimited_text_stdlib(engine: &mut Engine) {
     register_parse_line(engine, "__nox_std_csv_parse_line", ',');
     register_format_row(engine, "__nox_std_csv_format_row", ',', false);
+    register_parse_rows(engine, "__nox_std_csv_parse_rows", ',');
+    register_format_rows(engine, "__nox_std_csv_format_rows", ',', false);
     register_parse_line(engine, "__nox_std_tsv_parse_line", '\t');
     register_format_row(engine, "__nox_std_tsv_format_row", '\t', true);
+    register_parse_rows(engine, "__nox_std_tsv_parse_rows", '\t');
+    register_format_rows(engine, "__nox_std_tsv_format_rows", '\t', true);
 }
 
 fn register_collection_stdlib(engine: &mut Engine) {
@@ -8808,24 +9679,35 @@ fn register_url_stdlib(engine: &mut Engine) {
 
 const HTTP_MAX_RESPONSE_BYTES: usize = 1_048_576;
 
+#[derive(Debug, Clone)]
+struct HttpResponseParts {
+    status: i64,
+    headers: BTreeMap<String, String>,
+    body: Vec<u8>,
+}
+
 fn http_request(
     method: &str,
     url: &str,
+    headers: &BTreeMap<String, String>,
     body: Option<&str>,
     timeout_ms: i64,
 ) -> Result<(i64, String), String> {
     let body_bytes = body.map(|s| s.as_bytes().to_vec());
-    let (status, body) = http_request_bytes(method, url, body_bytes.as_deref(), timeout_ms)?;
-    let body_text = String::from_utf8_lossy(&body).to_string();
-    Ok((status, body_text))
+    let response = http_request_bytes(method, url, headers, body_bytes.as_deref(), timeout_ms)?;
+    let body_text = String::from_utf8_lossy(&response.body).to_string();
+    Ok((response.status, body_text))
 }
 
 fn http_request_bytes(
     method: &str,
     url: &str,
+    headers: &BTreeMap<String, String>,
     body: Option<&[u8]>,
     timeout_ms: i64,
-) -> Result<(i64, Vec<u8>), String> {
+) -> Result<HttpResponseParts, String> {
+    validate_http_method(method)?;
+    validate_http_headers(headers)?;
     let (scheme, host, port, path, query) = url_parse(url)?;
     if scheme != "http" {
         return Err(format!(
@@ -8867,6 +9749,18 @@ fn http_request_bytes(
     let mut request = format!(
         "{method} {request_path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: nox/0.0.x\r\nAccept: */*\r\nConnection: close\r\n"
     );
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case("content-length") {
+            return Err("custom Content-Length header is not supported".to_string());
+        }
+        if has_default_http_header(name) {
+            continue;
+        }
+        request.push_str(name);
+        request.push_str(": ");
+        request.push_str(value);
+        request.push_str("\r\n");
+    }
     if !body_bytes.is_empty() {
         request.push_str(&format!("Content-Length: {}\r\n", body_bytes.len()));
     }
@@ -8916,16 +9810,138 @@ fn http_request_bytes(
         .next()
         .and_then(|s| s.parse::<i64>().ok())
         .ok_or_else(|| format!("invalid status line: {status_line}"))?;
+    let headers = parse_http_response_headers(header_lines)?;
 
     let body_bytes = response[header_end + 4..].to_vec();
-    Ok((status_code, body_bytes))
+    Ok(HttpResponseParts {
+        status: status_code,
+        headers,
+        body: body_bytes,
+    })
+}
+
+fn validate_http_method(method: &str) -> Result<(), String> {
+    if method.is_empty() {
+        return Err("HTTP method cannot be empty".to_string());
+    }
+    if !method.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'!' | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+            )
+    }) {
+        return Err("HTTP method contains an invalid character".to_string());
+    }
+    Ok(())
+}
+
+fn validate_http_headers(headers: &BTreeMap<String, String>) -> Result<(), String> {
+    for (name, value) in headers {
+        if name.is_empty() {
+            return Err("HTTP header name cannot be empty".to_string());
+        }
+        if !name.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(
+                    byte,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        }) {
+            return Err(format!(
+                "HTTP header name '{name}' contains an invalid character"
+            ));
+        }
+        if value.bytes().any(|byte| matches!(byte, b'\r' | b'\n')) {
+            return Err(format!("HTTP header '{name}' contains a newline"));
+        }
+    }
+    Ok(())
+}
+
+fn has_default_http_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("host")
+        || name.eq_ignore_ascii_case("user-agent")
+        || name.eq_ignore_ascii_case("accept")
+        || name.eq_ignore_ascii_case("connection")
+}
+
+fn parse_http_response_headers<'a>(
+    lines: impl Iterator<Item = &'a str>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut headers = BTreeMap::new();
+    for line in lines {
+        if line.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            return Err(format!("invalid response header: {line}"));
+        };
+        let normalized = name.trim().to_ascii_lowercase();
+        if normalized.is_empty() {
+            return Err("empty response header name".to_string());
+        }
+        let value = value.trim().to_string();
+        headers
+            .entry(normalized)
+            .and_modify(|existing: &mut String| {
+                existing.push_str(", ");
+                existing.push_str(&value);
+            })
+            .or_insert(value);
+    }
+    Ok(headers)
+}
+
+fn normalize_http_headers(headers: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut normalized = BTreeMap::new();
+    for (name, value) in headers {
+        let key = name.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        normalized
+            .entry(key)
+            .and_modify(|existing: &mut String| {
+                existing.push_str(", ");
+                existing.push_str(value.trim());
+            })
+            .or_insert_with(|| value.trim().to_string());
+    }
+    normalized
 }
 
 fn http_mock_response(
     method: &str,
     url: &str,
     mock_network: Option<&MockNetworkHandle>,
-) -> Result<Option<(i64, Vec<u8>)>, String> {
+) -> Result<Option<HttpResponseParts>, String> {
     let Some(mock_network) = mock_network else {
         return Ok(None);
     };
@@ -8940,7 +9956,11 @@ fn http_mock_response(
     }
     if let Some(mock) = mock_network.borrow().as_ref() {
         return match mock.http_response(method, url) {
-            Some(response) => Ok(Some((response.status, response.body))),
+            Some(response) => Ok(Some(HttpResponseParts {
+                status: response.status,
+                headers: response.headers,
+                body: response.body,
+            })),
             None => Err(format!("mock network has no {method} response for '{url}'")),
         };
     }
@@ -8950,28 +9970,77 @@ fn http_mock_response(
 fn http_request_with_mock(
     method: &str,
     url: &str,
+    headers: &BTreeMap<String, String>,
     body: Option<&str>,
     timeout_ms: i64,
     mock_network: Option<&MockNetworkHandle>,
 ) -> Result<(i64, String), String> {
-    if let Some((status, body)) = http_mock_response(method, url, mock_network)? {
-        let body_text = String::from_utf8_lossy(&body).to_string();
-        return Ok((status, body_text));
+    if let Some(response) = http_mock_response(method, url, mock_network)? {
+        let body_text = String::from_utf8_lossy(&response.body).to_string();
+        return Ok((response.status, body_text));
     }
-    http_request(method, url, body, timeout_ms)
+    http_request(method, url, headers, body, timeout_ms)
 }
 
 fn http_request_bytes_with_mock(
     method: &str,
     url: &str,
+    headers: &BTreeMap<String, String>,
     body: Option<&[u8]>,
     timeout_ms: i64,
     mock_network: Option<&MockNetworkHandle>,
-) -> Result<(i64, Vec<u8>), String> {
+) -> Result<HttpResponseParts, String> {
     if let Some(response) = http_mock_response(method, url, mock_network)? {
         return Ok(response);
     }
-    http_request_bytes(method, url, body, timeout_ms)
+    http_request_bytes(method, url, headers, body, timeout_ms)
+}
+
+fn string_map_to_btree(map: &nox_core::Map) -> Result<BTreeMap<String, String>, String> {
+    let mut headers = BTreeMap::new();
+    for (key, value) in map.entries() {
+        match value {
+            Value::String(text) => {
+                headers.insert(key, text.as_ref().to_string());
+            }
+            _ => return Err("header map values must be strings".to_string()),
+        }
+    }
+    Ok(headers)
+}
+
+fn header_map_value(headers: BTreeMap<String, String>) -> Value {
+    let entries = headers
+        .into_iter()
+        .map(|(name, value)| (name, Value::string(value)))
+        .collect();
+    Value::map(Type::Str, entries)
+}
+
+fn http_response_value(response: HttpResponseParts, binary: bool) -> Value {
+    if binary {
+        Value::tuple(
+            vec![
+                Type::Int,
+                Type::Map(Box::new(Type::Str)),
+                Type::Array(Box::new(Type::Int)),
+            ],
+            vec![
+                Value::Int(response.status),
+                header_map_value(response.headers),
+                bytes_vec_to_array(response.body),
+            ],
+        )
+    } else {
+        Value::tuple(
+            vec![Type::Int, Type::Map(Box::new(Type::Str)), Type::Str],
+            vec![
+                Value::Int(response.status),
+                header_map_value(response.headers),
+                Value::string(String::from_utf8_lossy(&response.body).to_string()),
+            ],
+        )
+    }
 }
 
 fn register_http_stdlib(
@@ -8981,6 +10050,7 @@ fn register_http_stdlib(
 ) {
     let network_allowed_get = permissions.network;
     let response_type = Type::Tuple(vec![Type::Int, Type::Str]);
+    let empty_headers = BTreeMap::new();
     let response_type_get = response_type.clone();
     let mock_network_for_get = mock_network.clone();
     engine
@@ -9003,6 +10073,7 @@ fn register_http_stdlib(
                         match http_request_with_mock(
                             "GET",
                             url.as_ref(),
+                            &empty_headers,
                             None,
                             *timeout_ms,
                             mock_network_for_get.as_ref(),
@@ -9030,6 +10101,7 @@ fn register_http_stdlib(
     let network_allowed_post = permissions.network;
     let response_type_post = response_type.clone();
     let mock_network_for_post = mock_network.clone();
+    let empty_headers_post = BTreeMap::new();
     engine
         .register_host_function(
             HostFunctionBuilder::new(
@@ -9051,6 +10123,7 @@ fn register_http_stdlib(
                         match http_request_with_mock(
                             "POST",
                             url.as_ref(),
+                            &empty_headers_post,
                             Some(body.as_ref()),
                             *timeout_ms,
                             mock_network_for_post.as_ref(),
@@ -9075,10 +10148,73 @@ fn register_http_stdlib(
         )
         .expect("stdlib function registration is static");
 
+    let network_allowed_request = permissions.network;
+    let request_response_type =
+        Type::Tuple(vec![Type::Int, Type::Map(Box::new(Type::Str)), Type::Str]);
+    let request_response_type_inner = request_response_type.clone();
+    let mock_network_for_request = mock_network.clone();
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new(
+                "__nox_std_http_request",
+                Type::Result {
+                    ok: Box::new(request_response_type.clone()),
+                    err: Box::new(Type::Str),
+                },
+            )
+            .param("method", Type::Str)
+            .param("url", Type::Str)
+            .param("headers", Type::Map(Box::new(Type::Str)))
+            .param("body", Type::Str)
+            .param("timeout_ms", Type::Int),
+            move |args| {
+                if !network_allowed_request {
+                    return Err(call_capability_required("network", "http.request"));
+                }
+                match args {
+                    [
+                        Value::String(method),
+                        Value::String(url),
+                        Value::Map(headers),
+                        Value::String(body),
+                        Value::Int(timeout_ms),
+                    ] => match string_map_to_btree(headers) {
+                        Ok(headers) => match http_request_bytes_with_mock(
+                            method.as_ref(),
+                            url.as_ref(),
+                            &headers,
+                            Some(body.as_ref().as_bytes()),
+                            *timeout_ms,
+                            mock_network_for_request.as_ref(),
+                        ) {
+                            Ok(response) => Ok(Value::ok(
+                                request_response_type_inner.clone(),
+                                Type::Str,
+                                http_response_value(response, false),
+                            )),
+                            Err(message) => Ok(Value::err(
+                                request_response_type_inner.clone(),
+                                Type::Str,
+                                Value::string(message),
+                            )),
+                        },
+                        Err(message) => Ok(Value::err(
+                            request_response_type_inner.clone(),
+                            Type::Str,
+                            Value::string(message),
+                        )),
+                    },
+                    _ => unreachable!("static checker guarantees http.request argument types"),
+                }
+            },
+        )
+        .expect("stdlib function registration is static");
+
     let network_allowed_get_binary = permissions.network;
     let binary_response_type = Type::Tuple(vec![Type::Int, Type::Array(Box::new(Type::Int))]);
     let binary_response_type_get = binary_response_type.clone();
     let mock_network_for_get_binary = mock_network.clone();
+    let empty_headers_get_binary = BTreeMap::new();
     engine
         .register_host_function(
             HostFunctionBuilder::new(
@@ -9099,14 +10235,18 @@ fn register_http_stdlib(
                         match http_request_bytes_with_mock(
                             "GET",
                             url.as_ref(),
+                            &empty_headers_get_binary,
                             None,
                             *timeout_ms,
                             mock_network_for_get_binary.as_ref(),
                         ) {
-                            Ok((status, body)) => {
+                            Ok(response) => {
                                 let tuple = Value::tuple(
                                     vec![Type::Int, Type::Array(Box::new(Type::Int))],
-                                    vec![Value::Int(status), bytes_vec_to_array(body)],
+                                    vec![
+                                        Value::Int(response.status),
+                                        bytes_vec_to_array(response.body),
+                                    ],
                                 );
                                 Ok(Value::ok(
                                     binary_response_type_get.clone(),
@@ -9129,7 +10269,8 @@ fn register_http_stdlib(
 
     let network_allowed_post_binary = permissions.network;
     let binary_response_type_post = binary_response_type;
-    let mock_network_for_post_binary = mock_network;
+    let mock_network_for_post_binary = mock_network.clone();
+    let empty_headers_post_binary = BTreeMap::new();
     engine
         .register_host_function(
             HostFunctionBuilder::new(
@@ -9152,14 +10293,18 @@ fn register_http_stdlib(
                             Ok(body_bytes) => match http_request_bytes_with_mock(
                                 "POST",
                                 url.as_ref(),
+                                &empty_headers_post_binary,
                                 Some(&body_bytes),
                                 *timeout_ms,
                                 mock_network_for_post_binary.as_ref(),
                             ) {
-                                Ok((status, resp_body)) => {
+                                Ok(response) => {
                                     let tuple = Value::tuple(
                                         vec![Type::Int, Type::Array(Box::new(Type::Int))],
-                                        vec![Value::Int(status), bytes_vec_to_array(resp_body)],
+                                        vec![
+                                            Value::Int(response.status),
+                                            bytes_vec_to_array(response.body),
+                                        ],
                                     );
                                     Ok(Value::ok(
                                         binary_response_type_post.clone(),
@@ -9181,6 +10326,71 @@ fn register_http_stdlib(
                         }
                     }
                     _ => unreachable!("static checker guarantees http.post_binary argument types"),
+                }
+            },
+        )
+        .expect("stdlib function registration is static");
+
+    let network_allowed_request_binary = permissions.network;
+    let request_binary_response_type = Type::Tuple(vec![
+        Type::Int,
+        Type::Map(Box::new(Type::Str)),
+        Type::Array(Box::new(Type::Int)),
+    ]);
+    let request_binary_response_type_inner = request_binary_response_type.clone();
+    let mock_network_for_request_binary = mock_network;
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new(
+                "__nox_std_http_request_binary",
+                Type::Result {
+                    ok: Box::new(request_binary_response_type.clone()),
+                    err: Box::new(Type::Str),
+                },
+            )
+            .param("method", Type::Str)
+            .param("url", Type::Str)
+            .param("headers", Type::Map(Box::new(Type::Str)))
+            .param("body", Type::Array(Box::new(Type::Int)))
+            .param("timeout_ms", Type::Int),
+            move |args| {
+                if !network_allowed_request_binary {
+                    return Err(call_capability_required("network", "http.request_binary"));
+                }
+                match args {
+                    [
+                        Value::String(method),
+                        Value::String(url),
+                        Value::Map(headers),
+                        Value::Array(body),
+                        Value::Int(timeout_ms),
+                    ] => match (string_map_to_btree(headers), bytes_array_to_vec(body)) {
+                        (Ok(headers), Ok(body_bytes)) => match http_request_bytes_with_mock(
+                            method.as_ref(),
+                            url.as_ref(),
+                            &headers,
+                            Some(&body_bytes),
+                            *timeout_ms,
+                            mock_network_for_request_binary.as_ref(),
+                        ) {
+                            Ok(response) => Ok(Value::ok(
+                                request_binary_response_type_inner.clone(),
+                                Type::Str,
+                                http_response_value(response, true),
+                            )),
+                            Err(message) => Ok(Value::err(
+                                request_binary_response_type_inner.clone(),
+                                Type::Str,
+                                Value::string(message),
+                            )),
+                        },
+                        (Err(message), _) | (_, Err(message)) => Ok(Value::err(
+                            request_binary_response_type_inner.clone(),
+                            Type::Str,
+                            Value::string(message),
+                        )),
+                    },
+                    _ => unreachable!("static checker guarantees http.request_binary argument types"),
                 }
             },
         )
@@ -9220,6 +10430,26 @@ fn register_http_lsp_stubs(engine: &mut Engine) {
         )
         .expect("stdlib function registration is static");
 
+    let request_response_type =
+        Type::Tuple(vec![Type::Int, Type::Map(Box::new(Type::Str)), Type::Str]);
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new(
+                "__nox_std_http_request",
+                Type::Result {
+                    ok: Box::new(request_response_type),
+                    err: Box::new(Type::Str),
+                },
+            )
+            .param("method", Type::Str)
+            .param("url", Type::Str)
+            .param("headers", Type::Map(Box::new(Type::Str)))
+            .param("body", Type::Str)
+            .param("timeout_ms", Type::Int),
+            |_| Err(call_capability_required("network", "http.request")),
+        )
+        .expect("stdlib function registration is static");
+
     let binary_response_type = Type::Tuple(vec![Type::Int, Type::Array(Box::new(Type::Int))]);
     engine
         .register_host_function(
@@ -9249,6 +10479,29 @@ fn register_http_lsp_stubs(engine: &mut Engine) {
             .param("body", Type::Array(Box::new(Type::Int)))
             .param("timeout_ms", Type::Int),
             |_| Err(call_capability_required("network", "http.post_binary")),
+        )
+        .expect("stdlib function registration is static");
+
+    let request_binary_response_type = Type::Tuple(vec![
+        Type::Int,
+        Type::Map(Box::new(Type::Str)),
+        Type::Array(Box::new(Type::Int)),
+    ]);
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new(
+                "__nox_std_http_request_binary",
+                Type::Result {
+                    ok: Box::new(request_binary_response_type),
+                    err: Box::new(Type::Str),
+                },
+            )
+            .param("method", Type::Str)
+            .param("url", Type::Str)
+            .param("headers", Type::Map(Box::new(Type::Str)))
+            .param("body", Type::Array(Box::new(Type::Int)))
+            .param("timeout_ms", Type::Int),
+            |_| Err(call_capability_required("network", "http.request_binary")),
         )
         .expect("stdlib function registration is static");
 }
@@ -9899,6 +11152,100 @@ fn register_format_row(engine: &mut Engine, name: &'static str, delimiter: char,
         .expect("stdlib function registration is static");
 }
 
+fn register_parse_rows(engine: &mut Engine, name: &'static str, delimiter: char) {
+    let row_type = Type::Array(Box::new(Type::Str));
+    let rows_type = Type::Array(Box::new(row_type.clone()));
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new(
+                name,
+                Type::Result {
+                    ok: Box::new(rows_type.clone()),
+                    err: Box::new(Type::Str),
+                },
+            )
+            .param("value", Type::Str),
+            move |args| match args {
+                [Value::String(value)] => match parse_delimited_rows(value.as_ref(), delimiter) {
+                    Ok(rows) => {
+                        let row_values = rows
+                            .into_iter()
+                            .map(|row| {
+                                Value::array(
+                                    Type::Str,
+                                    row.into_iter().map(Value::string).collect(),
+                                )
+                            })
+                            .collect();
+                        Ok(Value::ok(
+                            rows_type.clone(),
+                            Type::Str,
+                            Value::array(row_type.clone(), row_values),
+                        ))
+                    }
+                    Err((line, message)) => Ok(Value::err(
+                        rows_type.clone(),
+                        Type::Str,
+                        Value::string(format!("line {line}: {message}")),
+                    )),
+                },
+                _ => unreachable!("static checker guarantees delimited parse_rows argument type"),
+            },
+        )
+        .expect("stdlib function registration is static");
+}
+
+fn register_format_rows(engine: &mut Engine, name: &'static str, delimiter: char, fallible: bool) {
+    let return_type = if fallible {
+        Type::Result {
+            ok: Box::new(Type::Str),
+            err: Box::new(Type::Str),
+        }
+    } else {
+        Type::Str
+    };
+    engine
+        .register_host_function(
+            HostFunctionBuilder::new(name, return_type).param(
+                "values",
+                Type::Array(Box::new(Type::Array(Box::new(Type::Str)))),
+            ),
+            move |args| match args {
+                [Value::Array(rows)] => {
+                    let mut lines = Vec::new();
+                    for (index, row) in rows.elements().iter().enumerate() {
+                        let Value::Array(row) = row else {
+                            return Err(Diagnostic::new(
+                                "format_rows values must contain string rows",
+                                Span { start: 0, end: 0 },
+                            ));
+                        };
+                        let row_values = string_array_values(&row.elements())?;
+                        match format_delimited_row(&row_values, delimiter) {
+                            Ok(line) => lines.push(line),
+                            Err(message) if fallible => {
+                                return Ok(Value::err(
+                                    Type::Str,
+                                    Type::Str,
+                                    Value::string(format!("line {}: {message}", index + 1)),
+                                ));
+                            }
+                            Err(message) => return Err(string_argument_error_owned(message)),
+                        }
+                    }
+                    let text = lines.join("\n");
+                    if fallible {
+                        Ok(Value::ok(Type::Str, Type::Str, Value::string(text)))
+                    } else {
+                        Ok(Value::string(text))
+                    }
+                }
+                _ => unreachable!("static checker guarantees delimited format_rows argument type"),
+            },
+        )
+        .expect("stdlib function registration is static");
+}
+
 struct JsonParser<'a> {
     input: &'a str,
     pos: usize,
@@ -10281,6 +11628,91 @@ fn parse_delimited_line(input: &str, delimiter: char) -> Result<Vec<String>, Str
     Ok(fields)
 }
 
+fn parse_delimited_rows(input: &str, delimiter: char) -> Result<Vec<Vec<String>>, (usize, String)> {
+    let mut rows = Vec::new();
+    let mut row = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+    let mut in_quotes = false;
+    let mut field_started = false;
+    let mut row_started = false;
+    let mut current_line = 1usize;
+    let mut row_start_line = 1usize;
+    let mut saw_any = false;
+
+    while let Some(ch) = chars.next() {
+        saw_any = true;
+        if in_quotes {
+            match ch {
+                '"' if matches!(chars.peek(), Some('"')) => {
+                    let _ = chars.next();
+                    current.push('"');
+                }
+                '"' => {
+                    in_quotes = false;
+                    field_started = true;
+                    row_started = true;
+                }
+                '\n' => {
+                    current.push(ch);
+                    current_line += 1;
+                }
+                '\r' => {
+                    current.push(ch);
+                    if matches!(chars.peek(), Some('\n')) {
+                        let _ = chars.next();
+                        current.push('\n');
+                    }
+                    current_line += 1;
+                }
+                _ => current.push(ch),
+            }
+            continue;
+        }
+
+        if ch == delimiter {
+            row.push(current);
+            current = String::new();
+            field_started = false;
+            row_started = true;
+        } else if ch == '\n' || ch == '\r' {
+            row.push(current);
+            rows.push(row);
+            row = Vec::new();
+            current = String::new();
+            field_started = false;
+            row_started = false;
+            current_line += 1;
+            if ch == '\r' && matches!(chars.peek(), Some('\n')) {
+                let _ = chars.next();
+            }
+            row_start_line = current_line;
+        } else if ch == '"' && !field_started && current.is_empty() {
+            in_quotes = true;
+            field_started = true;
+            row_started = true;
+        } else if ch == '"' {
+            return Err((
+                current_line,
+                "unexpected quote in unquoted field".to_string(),
+            ));
+        } else {
+            field_started = true;
+            row_started = true;
+            current.push(ch);
+        }
+    }
+
+    if in_quotes {
+        return Err((row_start_line, "unterminated quoted field".to_string()));
+    }
+    if saw_any && (row_started || field_started || !current.is_empty() || !row.is_empty()) {
+        row.push(current);
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
 fn format_delimited_row(values: &[String], delimiter: char) -> Result<String, String> {
     let mut row = String::new();
     for (index, value) in values.iter().enumerate() {
@@ -10334,6 +11766,7 @@ mod tests {
         "std/time.nox",
         "std/string.nox",
         "std/json.nox",
+        "std/jsonl.nox",
         "std/csv.nox",
         "std/tsv.nox",
         "std/array.nox",
@@ -10343,6 +11776,7 @@ mod tests {
         "std/term.nox",
         "std/bytes.nox",
         "std/encoding.nox",
+        "std/hash.nox",
         "std/dotenv.nox",
         "std/ini.nox",
         "std/toml.nox",
@@ -10418,8 +11852,29 @@ mod tests {
         );
     }
 
+    fn assert_stdlib_index_lists_every_module(index_path: &str, label: &str) {
+        let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let index_doc = std::fs::read_to_string(manifest.join(index_path))
+            .unwrap_or_else(|_| panic!("{index_path} should exist"));
+        let mut missing = Vec::new();
+        for specifier in STD_MODULE_SPECIFIERS {
+            if !index_doc.contains(&format!("`{specifier}`")) {
+                missing.push(*specifier);
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "the following std modules are missing from {label}:\n  - {}",
+            missing.join("\n  - ")
+        );
+    }
+
     #[test]
     fn stdlib_index_documents_every_exported_helper() {
+        assert_stdlib_index_lists_every_module(
+            "../../docs/zh_CN/stdlib-index.md",
+            "docs/zh_CN/stdlib-index.md",
+        );
         assert_docs_cover_every_export(
             "../../docs/zh_CN/runtime.md",
             "../../docs/zh_CN/stdlib-index.md",
@@ -10429,6 +11884,10 @@ mod tests {
 
     #[test]
     fn english_stdlib_index_documents_every_exported_helper() {
+        assert_stdlib_index_lists_every_module(
+            "../../docs/en/stdlib-index.md",
+            "docs/en/stdlib-index.md",
+        );
         assert_docs_cover_every_export(
             "../../docs/en/runtime.md",
             "../../docs/en/stdlib-index.md",
@@ -10831,6 +12290,111 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value, Value::string("delimited-ok"));
+    }
+
+    #[test]
+    fn jsonl_stdlib_parses_and_formats_lines_with_line_errors() {
+        let mut runtime = Runtime::new();
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let value = runtime
+            .eval(
+                r#"
+                import "std/json.nox" as json;
+                import "std/jsonl.nox" as jsonl;
+
+                let parsed: result[[json], str] = jsonl.parse_lines("{\"id\":1}\n{\"id\":2}");
+                match (parsed) {
+                    ok(values) => {
+                        let first_id_json: result[json, str] = json.object_get(values[0], "id");
+                        let bad: result[[json], str] = jsonl.parse_lines("{\"ok\":true}\nnot-json");
+                        match (first_id_json) {
+                            ok(first_id) => {
+                                match (bad) {
+                                    ok(_) => {
+                                        "jsonl-bad";
+                                    }
+                                    err(message) => {
+                                        let first_id_int: result[int, str] = json.as_int(first_id);
+                                        match (first_id_int) {
+                                            ok(id) => {
+                                                if (
+                                                    id == 1 &&
+                                                    len(values) == 2 &&
+                                                    jsonl.format_lines(values) == "{\"id\":1}\n{\"id\":2}" &&
+                                                    message == "line 2: expected JSON literal 'null'"
+                                                ) {
+                                                    "jsonl-ok";
+                                                } else {
+                                                    "jsonl-bad";
+                                                }
+                                            }
+                                            err(message) => { message; }
+                                        }
+                                    }
+                                }
+                            }
+                            err(message) => { message; }
+                        }
+                    }
+                    err(message) => { message; }
+                }
+                "#,
+            )
+            .unwrap();
+        assert_eq!(value, Value::string("jsonl-ok"));
+    }
+
+    #[test]
+    fn delimited_text_helpers_parse_and_format_multiline_rows() {
+        let mut runtime = Runtime::new();
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let value = runtime
+            .eval(
+                r#"
+                import "std/csv.nox" as csv;
+                import "std/tsv.nox" as tsv;
+
+                let parsed_csv: result[[[str]], str] = csv.parse_rows("name,note\nnox,\"typed\nruntime\"");
+                let parsed_tsv: result[[[str]], str] = tsv.parse_rows("name\tnote\nnox\ttyped runtime");
+                let bad_csv: result[[[str]], str] = csv.parse_rows("ok\n\"bad");
+                match (parsed_csv) {
+                    ok(csv_rows) => {
+                        match (parsed_tsv) {
+                            ok(tsv_rows) => {
+                                match (bad_csv) {
+                                    ok(_) => {
+                                        "rows-bad";
+                                    }
+                                    err(message) => {
+                                        let tsv_text: result[str, str] = tsv.format_rows(tsv_rows);
+                                        match (tsv_text) {
+                                            ok(tsv_formatted) => {
+                                                if (
+                                                    len(csv_rows) == 2 &&
+                                                    csv_rows[1][1] == "typed\nruntime" &&
+                                                    csv.format_rows(csv_rows) == "name,note\nnox,\"typed\nruntime\"" &&
+                                                    tsv_formatted == "name\tnote\nnox\ttyped runtime" &&
+                                                    message == "line 2: unterminated quoted field"
+                                                ) {
+                                                    "rows-ok";
+                                                } else {
+                                                    "rows-bad";
+                                                }
+                                            }
+                                            err(message) => { message; }
+                                        }
+                                    }
+                                }
+                            }
+                            err(message) => { message; }
+                        }
+                    }
+                    err(message) => { message; }
+                }
+                "#,
+            )
+            .unwrap();
+        assert_eq!(value, Value::string("rows-ok"));
     }
 
     #[test]
@@ -12369,6 +13933,107 @@ mod tests {
     }
 
     #[test]
+    fn async_std_fs_wrappers_use_existing_filesystem_boundary() {
+        let dir =
+            std::env::temp_dir().join(format!("nox-async-fs-{}-{}", std::process::id(), line!()));
+        fs::create_dir_all(&dir).unwrap();
+        let text_path = dir.join("note.txt");
+        let binary_path = dir.join("raw.bin");
+        let out_path = dir.join("out.bin");
+
+        let permissions = RuntimePermissions::none()
+            .allow_filesystem_read_under(&dir)
+            .allow_filesystem_write_under(&dir);
+        let mut runtime = Runtime::with_permissions(permissions);
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        runtime.set_mock_filesystem(Some(
+            MockFilesystem::new()
+                .with_text_file(&text_path, "mock-text")
+                .with_binary_file(&binary_path, vec![65, 66, 255]),
+        ));
+
+        let value = runtime
+            .eval(&format!(
+                r#"
+                import "std/fs.nox" as fs;
+
+                let read_ok: bool = false;
+                let binary_ok: bool = false;
+                let write_ok: bool = false;
+                let canonical_ok: bool = false;
+
+                async fn probe() -> null {{
+                    let loaded: result[str, str] = await fs.try_read_text_async("{}");
+                    match (loaded) {{
+                        ok(contents) => {{ read_ok = contents == "mock-text"; }}
+                        err(_) => {{ read_ok = false; }}
+                    }}
+
+                    let binary: result[[int], str] = await fs.read_binary_async("{}");
+                    match (binary) {{
+                        ok(bytes) => {{
+                            binary_ok = len(bytes) == 3 && bytes[0] == 65 && bytes[2] == 255;
+                        }}
+                        err(_) => {{ binary_ok = false; }}
+                    }}
+
+                    let wrote: result[null, str] = await fs.write_binary_async("{}", [1, 2, 3]);
+                    match (wrote) {{
+                        ok(_) => {{ write_ok = true; }}
+                        err(_) => {{ write_ok = false; }}
+                    }}
+
+                    let canonical: result[str, str] = await fs.canonicalize_async("{}");
+                    match (canonical) {{
+                        ok(path) => {{ canonical_ok = path == "{}"; }}
+                        err(_) => {{ canonical_ok = false; }}
+                    }}
+                    return null;
+                }}
+
+                let task: task[null] = probe();
+                if (read_ok && binary_ok && write_ok && canonical_ok) {{
+                    "async-fs-ok";
+                }} else {{
+                    "async-fs-bad";
+                }}
+                "#,
+                text_path.display(),
+                binary_path.display(),
+                out_path.display(),
+                text_path.display(),
+                text_path.display(),
+            ))
+            .unwrap();
+
+        assert_eq!(value, Value::string("async-fs-ok"));
+        assert!(!out_path.exists());
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn async_std_fs_wrappers_require_filesystem_capability() {
+        let mut runtime = Runtime::new();
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let err = runtime
+            .eval(
+                r#"
+                import "std/fs.nox" as fs;
+
+                async fn probe() -> null {
+                    let loaded: result[str, str] = await fs.try_read_text_async("none.txt");
+                    return null;
+                }
+
+                let task: task[null] = probe();
+                "#,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
+        assert!(err.message.contains("filesystem capability"));
+    }
+
+    #[test]
     fn mock_filesystem_does_not_bypass_read_allowlist() {
         let dir = std::env::temp_dir().join(format!(
             "nox-mock-fs-allow-{}-{}",
@@ -12612,6 +14277,65 @@ mod tests {
     }
 
     #[test]
+    fn async_std_http_wrappers_use_existing_network_boundary() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            network: true,
+            ..RuntimePermissions::default()
+        });
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        runtime.set_mock_network(Some(
+            MockNetwork::new()
+                .with_http_text_response("GET", "http://example.test/data", 203, "mock-body")
+                .with_http_binary_response(
+                    "POST",
+                    "http://example.test/upload",
+                    204,
+                    vec![1, 2, 255],
+                ),
+        ));
+
+        let value = runtime
+            .eval(
+                r#"
+                import "std/http.nox" as http;
+
+                let get_ok: bool = false;
+                let post_ok: bool = false;
+
+                async fn probe() -> null {
+                    let get_response: result[(int, str), str] = await http.get_async("http://example.test/data", 1);
+                    match (get_response) {
+                        ok(response) => {
+                            let (status, body) = response;
+                            get_ok = status == 203 && body == "mock-body";
+                        }
+                        err(_) => { get_ok = false; }
+                    }
+
+                    let post_response: result[(int, [int]), str] = await http.post_binary_async("http://example.test/upload", [9, 8], 1);
+                    match (post_response) {
+                        ok(response) => {
+                            let (status, body) = response;
+                            post_ok = status == 204 && len(body) == 3 && body[2] == 255;
+                        }
+                        err(_) => { post_ok = false; }
+                    }
+                    return null;
+                }
+
+                let task: task[null] = probe();
+                if (get_ok && post_ok) {
+                    "async-http-ok";
+                } else {
+                    "async-http-bad";
+                }
+                "#,
+            )
+            .unwrap();
+        assert_eq!(value, Value::string("async-http-ok"));
+    }
+
+    #[test]
     fn mock_network_does_not_grant_network_capability() {
         let mut runtime = Runtime::new();
         runtime.set_import_base(std::env::temp_dir(), Vec::new());
@@ -12626,6 +14350,67 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, "permission.denied");
         assert!(err.message.contains("network capability"));
+    }
+
+    #[test]
+    fn async_std_http_wrappers_require_network_capability() {
+        let mut runtime = Runtime::new();
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let err = runtime
+            .eval(
+                r#"
+                import "std/http.nox" as http;
+
+                async fn probe() -> null {
+                    let response: result[(int, str), str] = await http.get_async("http://example.test/data", 1);
+                    return null;
+                }
+
+                let task: task[null] = probe();
+                "#,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
+        assert!(err.message.contains("network capability"));
+    }
+
+    #[test]
+    fn async_await_can_interleave_host_callback_and_runtime_task() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+        runtime
+            .engine_mut()
+            .register_host_function(HostFunctionBuilder::new("host_value", Type::Int), |_| {
+                Ok(Value::Int(21))
+            })
+            .unwrap();
+
+        let value = runtime
+            .eval(
+                r#"
+                let passed: bool = false;
+
+                async fn probe() -> null {
+                    let before: int = host_value();
+                    await task_sleep(0);
+                    let after: int = host_value();
+                    passed = before == 21 && after == 21;
+                    return null;
+                }
+
+                let task: task[null] = probe();
+                if (passed) {
+                    "async-host-ok";
+                } else {
+                    "async-host-bad";
+                }
+                "#,
+            )
+            .unwrap();
+        assert_eq!(value, Value::string("async-host-ok"));
+        assert_eq!(runtime.pending_async_task_count(), 0);
     }
 
     #[test]
@@ -12938,6 +14723,32 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value, Value::string("bytes-ok"));
+    }
+
+    #[test]
+    fn hash_stdlib_sha256_and_hmac_hash_text_and_bytes() {
+        let mut runtime = Runtime::new();
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let value = runtime
+            .eval(
+                r#"
+                import "std/hash.nox" as hash;
+
+                if (
+                    hash.sha256_text("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
+                    hash.sha256_hex([97, 98, 99]) == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
+                    hash.sha256_text("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" &&
+                    hash.hmac_sha256_text("key", "The quick brown fox jumps over the lazy dog") == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8" &&
+                    hash.hmac_sha256_hex([107, 101, 121], [84, 104, 101]) == "c42933273b78944b2aab3e7bafa21d5da976d162d69904ded282c6c540f26b2e"
+                ) {
+                    "hash-ok";
+                } else {
+                    "hash-bad";
+                }
+                "#,
+            )
+            .unwrap();
+        assert_eq!(value, Value::string("hash-ok"));
     }
 
     #[test]
@@ -13502,7 +15313,145 @@ mod tests {
     }
 
     #[test]
-    fn array_stdlib_dedupe_and_contains_value_use_equatable_constraint() {
+    fn http_stdlib_request_sends_headers_body_and_returns_folded_response_headers() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap();
+            request.extend_from_slice(&buf[..n]);
+            let request_text = String::from_utf8_lossy(&request);
+            assert!(request_text.starts_with("PUT /api HTTP/1.1"));
+            assert!(request_text.contains("\r\nx-nox-token: abc\r\n"));
+            assert!(request_text.ends_with("payload"));
+            let response = concat!(
+                "HTTP/1.1 201 Created\r\n",
+                "Content-Type: application/json\r\n",
+                "Set-Cookie: a=1\r\n",
+                "Set-Cookie: b=2\r\n",
+                "Content-Length: 11\r\n",
+                "Connection: close\r\n",
+                "\r\n",
+                "{\"ok\":true}"
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            network: true,
+            ..RuntimePermissions::default()
+        });
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let source = format!(
+            r#"
+            import "std/http.nox" as http;
+
+            let response: result[(int, map[str, str], str), str] = http.request("PUT", "http://127.0.0.1:{port}/api", {{"x-nox-token": "abc"}}, "payload", 5000);
+            match (response) {{
+                ok(parts) => {{
+                    let (status, headers, body) = parts;
+                    if (
+                        status == 201 &&
+                        headers["content-type"] == "application/json" &&
+                        headers["set-cookie"] == "a=1, b=2" &&
+                        body == "{{\"ok\":true}}"
+                    ) {{
+                        "request-ok";
+                    }} else {{
+                        "request-bad";
+                    }}
+                }}
+                err(message) => {{
+                    message;
+                }}
+            }}
+            "#
+        );
+        let value = runtime.eval(&source).unwrap();
+        handle.join().unwrap();
+        assert_eq!(value, Value::string("request-ok"));
+    }
+
+    #[test]
+    fn http_stdlib_request_binary_uses_mock_response_headers_and_body() {
+        let mut headers = BTreeMap::new();
+        headers.insert("X-Mock".to_string(), "yes".to_string());
+
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            network: true,
+            ..RuntimePermissions::default()
+        });
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        runtime.set_mock_network(Some(MockNetwork::new().with_http_binary_response_headers(
+            "POST",
+            "http://example.test/upload",
+            202,
+            headers,
+            vec![5, 4, 3],
+        )));
+
+        let value = runtime
+            .eval(
+                r#"
+                import "std/http.nox" as http;
+
+                let response: result[(int, map[str, str], [int]), str] = http.request_binary("POST", "http://example.test/upload", {"x-client": "ok"}, [9, 8], 1);
+                match (response) {
+                    ok(parts) => {
+                        let (status, headers, body) = parts;
+                        if (status == 202 && headers["x-mock"] == "yes" && len(body) == 3 && body[0] == 5 && body[2] == 3) {
+                            "request-binary-ok";
+                        } else {
+                            "request-binary-bad";
+                        }
+                    }
+                    err(message) => {
+                        message;
+                    }
+                }
+                "#,
+            )
+            .unwrap();
+
+        assert_eq!(value, Value::string("request-binary-ok"));
+    }
+
+    #[test]
+    fn http_stdlib_request_missing_mock_response_does_not_fall_back() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            network: true,
+            ..RuntimePermissions::default()
+        });
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        runtime.set_mock_network(Some(MockNetwork::new()));
+
+        let value = runtime
+            .eval(
+                r#"
+                import "std/http.nox" as http;
+                let response: result[(int, map[str, str], str), str] = http.request("PATCH", "http://127.0.0.1:9/missing", {}, "", 1);
+                match (response) {
+                    ok(_) => { "unexpected-ok"; }
+                    err(message) => { message; }
+                }
+                "#,
+            )
+            .unwrap();
+
+        let Value::String(message) = value else {
+            panic!("expected mock network error string");
+        };
+        assert!(message.contains("mock network has no PATCH response"));
+    }
+
+    #[test]
+    fn array_stdlib_dedupe_and_contains_value_use_equatable_constraint_and_eq_trait() {
         let mut runtime = Runtime::new();
         runtime.set_import_base(std::env::temp_dir(), Vec::new());
         let value = runtime
@@ -13514,8 +15463,20 @@ mod tests {
                 let d: [int] = array.dedupe(xs);
                 let found: bool = array.contains_value(xs, 3);
                 let missing: bool = array.contains_value(xs, 99);
+                let td: [int] = array.dedupe_equal(xs);
+                let tfound: bool = array.contains_equal(xs, 3);
+                let tmissing: bool = array.contains_equal(xs, 99);
 
-                if (array.len(d) == 4 && d[0] == 1 && d[3] == 4 && found && !missing) {
+                if (array.len(d) == 4 &&
+                    d[0] == 1 &&
+                    d[3] == 4 &&
+                    found &&
+                    !missing &&
+                    array.len(td) == 4 &&
+                    td[0] == 1 &&
+                    td[3] == 4 &&
+                    tfound &&
+                    !tmissing) {
                     "equatable-helpers-ok";
                 } else {
                     "equatable-helpers-bad";
@@ -13524,6 +15485,73 @@ mod tests {
             )
             .unwrap();
         assert_eq!(value, Value::string("equatable-helpers-ok"));
+    }
+
+    #[test]
+    fn array_stdlib_eq_trait_helpers_accept_user_record_impl() {
+        let mut runtime = Runtime::new();
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let value = runtime
+            .eval(
+                r#"
+                import "std/array.nox";
+
+                record User {
+                    id: int,
+                    name: str,
+                }
+
+                impl Eq for User {
+                    fn equals(self: User, other: User) -> bool {
+                        return self.id == other.id;
+                    }
+                }
+
+                let xs: [User] = [
+                    User { id: 1, name: "a" },
+                    User { id: 2, name: "b" },
+                    User { id: 1, name: "c" },
+                ];
+                let d: [User] = dedupe_equal(xs);
+                let found: bool = contains_equal(xs, User { id: 2, name: "other" });
+                if (len(d) == 2 && d[0].name == "a" && d[1].name == "b" && found) {
+                    "eq-record-ok";
+                } else {
+                    "eq-record-bad";
+                }
+                "#,
+            )
+            .unwrap();
+        assert_eq!(value, Value::string("eq-record-ok"));
+    }
+
+    #[test]
+    fn array_stdlib_eq_trait_helpers_reject_user_record_without_impl() {
+        let mut runtime = Runtime::new();
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let err = runtime
+            .eval(
+                r#"
+                import "std/array.nox" as array;
+
+                record User {
+                    id: int,
+                }
+
+                let xs: [User] = [
+                    User { id: 1 },
+                    User { id: 1 },
+                ];
+                array.dedupe_equal(xs);
+                "#,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "trait.bound-unsatisfied");
+        assert!(
+            err.message.contains("does not implement"),
+            "expected trait bound message, got: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -13618,16 +15646,44 @@ mod tests {
                 let loaded: result[int, str] = ok(9);
                 let failed: result[int, str] = err("missing");
                 let mapped: result[int, str] = result.map_err_to_str(failed);
+                fn double(value: int) -> int {
+                    return value * 2;
+                }
+                fn parse_positive(value: int) -> result[int, str] {
+                    if (value > 0) {
+                        return ok(value);
+                    } else {
+                        return err("not-positive");
+                    }
+                }
+                fn as_some(value: int) -> option[int] {
+                    return some(value + 1);
+                }
+                fn prefix(value: str) -> str {
+                    return "error:" + value;
+                }
+                let option_mapped: option[int] = option.map(present, double);
+                let option_chained: option[int] = option.and_then(present, as_some);
+                let option_none_mapped: option[int] = option.map(missing, double);
+                let result_mapped: result[int, str] = result.map(loaded, double);
+                let result_chained: result[int, str] = result.and_then(loaded, parse_positive);
+                let result_err_mapped: result[int, str] = result.map_err(failed, prefix);
 
                 if (
                     option.is_some(present) &&
                     option.is_none(missing) &&
                     option.unwrap_or(present, 0) == 7 &&
                     option.unwrap_or(missing, 5) == 5 &&
+                    option.unwrap_or(option_mapped, 0) == 14 &&
+                    option.unwrap_or(option_chained, 0) == 8 &&
+                    option.is_none(option_none_mapped) &&
                     result.is_ok(loaded) &&
                     result.is_err(failed) &&
                     result.unwrap_or(loaded, 0) == 9 &&
                     result.unwrap_or(failed, 4) == 4 &&
+                    result.unwrap_or(result_mapped, 0) == 18 &&
+                    result.unwrap_or(result_chained, 0) == 9 &&
+                    result.is_err(result_err_mapped) &&
                     result.is_err(mapped)
                 ) {
                     "option-result-ok";
@@ -14506,6 +16562,269 @@ describe_read("{}");
     }
 
     #[test]
+    fn async_await_sleep_task_uses_runtime_task_table() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+        runtime.set_runtime_trace_enabled(true);
+        let value = runtime
+            .eval(
+                r#"
+                async fn pause() -> int {
+                    await task_sleep(0);
+                    return 42;
+                }
+
+                let task: task[int] = pause();
+                7;
+                "#,
+            )
+            .unwrap();
+        assert_eq!(value, Value::Int(7));
+        assert_eq!(runtime.pending_async_task_count(), 0);
+        let events = runtime.take_runtime_trace_events();
+        assert!(events.iter().any(|event| {
+            event.event == "task"
+                && matches!(
+                    event.fields.get("operation"),
+                    Some(RuntimeTraceValue::String(operation)) if operation == "await"
+                )
+        }));
+    }
+
+    #[test]
+    fn async_await_std_task_sleep_wrapper_uses_runtime_task_table() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let value = runtime
+            .eval(
+                r#"
+                import "std/task.nox" as task;
+
+                async fn pause() -> int {
+                    await task.sleep(0);
+                    return 42;
+                }
+
+                let pending: task[int] = pause();
+                9;
+                "#,
+            )
+            .unwrap();
+        assert_eq!(value, Value::Int(9));
+        assert_eq!(runtime.pending_async_task_count(), 0);
+    }
+
+    #[test]
+    fn async_await_sleep_task_requires_capability() {
+        let mut runtime = Runtime::new();
+        let err = runtime
+            .eval(
+                r#"
+                async fn pause() -> null {
+                    await task_sleep(0);
+                    return null;
+                }
+
+                let task: task[null] = pause();
+                0;
+                "#,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
+        assert!(err.message.contains("async task capability"));
+        assert_eq!(runtime.pending_async_task_count(), 0);
+    }
+
+    #[test]
+    fn async_await_sleep_task_pending_cap_cleans_created_tasks() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            async_task_max_pending: Some(1),
+            ..RuntimePermissions::none()
+        });
+        let err = runtime
+            .eval(
+                r#"
+                async fn spawn_two() -> null {
+                    let first: task[null] = task_sleep(60000);
+                    let second: task[null] = task_sleep(60000);
+                    return null;
+                }
+
+                let task: task[null] = spawn_two();
+                0;
+                "#,
+            )
+            .unwrap_err();
+        assert_eq!(err.code, "runtime.task-pending-cap");
+        assert_eq!(runtime.pending_async_task_count(), 0);
+    }
+
+    #[test]
+    fn async_await_sleep_task_failed_eval_cleans_unawaited_tasks_created_by_that_eval() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+
+        let err = runtime
+            .eval(
+                r#"
+                async fn fail_after_spawn() -> null {
+                    let pending: task[null] = task_sleep(60000);
+                    task_sleep(-1);
+                    return null;
+                }
+
+                let task: task[null] = fail_after_spawn();
+                0;
+                "#,
+            )
+            .unwrap_err();
+
+        assert!(err.message.contains("non-negative duration"));
+        assert_eq!(runtime.pending_async_task_count(), 0);
+    }
+
+    #[test]
+    fn async_await_sleep_task_failed_eval_preserves_preexisting_tasks() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+
+        runtime.eval("task_sleep_ms(60000);").unwrap();
+        assert_eq!(runtime.pending_async_task_count(), 1);
+
+        let err = runtime
+            .eval(
+                r#"
+                async fn fail_after_spawn() -> null {
+                    let pending: task[null] = task_sleep(60000);
+                    task_sleep(-1);
+                    return null;
+                }
+
+                let task: task[null] = fail_after_spawn();
+                0;
+                "#,
+            )
+            .unwrap_err();
+
+        assert!(err.message.contains("non-negative duration"));
+        assert_eq!(runtime.pending_async_task_count(), 1);
+    }
+
+    #[test]
+    fn async_await_sleep_task_error_keeps_script_stack_frame() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+
+        let err = runtime
+            .eval(
+                r#"
+                async fn pause() -> null {
+                    await task_sleep(-1);
+                    return null;
+                }
+
+                let task: task[null] = pause();
+                0;
+                "#,
+            )
+            .unwrap_err();
+
+        assert!(err.message.contains("non-negative duration"));
+        let frames = err
+            .stack_frames
+            .iter()
+            .map(|frame| frame.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(frames, vec!["task_sleep", "pause"]);
+        assert_eq!(runtime.pending_async_task_count(), 0);
+    }
+
+    #[test]
+    fn async_task_rust_api_spawns_polls_and_cancels_sleep_tasks() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+        let ready = runtime.spawn_sleep_task(Duration::from_millis(0)).unwrap();
+        assert_eq!(
+            runtime.poll_async_task(ready).unwrap(),
+            AsyncTaskPoll::Ready
+        );
+        assert_eq!(runtime.pending_async_task_count(), 0);
+
+        let pending = runtime
+            .spawn_sleep_task(Duration::from_millis(60_000))
+            .unwrap();
+        assert_eq!(
+            runtime.poll_async_task(pending).unwrap(),
+            AsyncTaskPoll::Pending
+        );
+        assert_eq!(runtime.pending_async_task_count(), 1);
+        runtime.cancel_async_task(pending).unwrap();
+        assert_eq!(runtime.pending_async_task_count(), 0);
+        let err = runtime.poll_async_task(pending).unwrap_err();
+        assert!(err.message.contains("unknown async task id"));
+    }
+
+    #[test]
+    fn async_task_rust_api_preserves_host_created_tasks_after_eval_failure() {
+        let mut runtime = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            ..RuntimePermissions::none()
+        });
+        let host_task = runtime
+            .spawn_sleep_task(Duration::from_millis(60_000))
+            .unwrap();
+        let err = runtime
+            .eval(
+                r#"
+                task_sleep_ms(60000);
+                task_ready(999);
+                "#,
+            )
+            .unwrap_err();
+        assert!(err.message.contains("unknown async task id"));
+        assert_eq!(runtime.pending_async_task_count(), 1);
+        runtime.cancel_async_task(host_task).unwrap();
+        assert_eq!(runtime.pending_async_task_count(), 0);
+    }
+
+    #[test]
+    fn async_task_rust_api_respects_permissions_and_pending_cap() {
+        let mut denied = Runtime::new();
+        let err = denied
+            .spawn_sleep_task(Duration::from_millis(0))
+            .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
+
+        let mut capped = Runtime::with_permissions(RuntimePermissions {
+            async_tasks: true,
+            async_task_max_pending: Some(1),
+            ..RuntimePermissions::none()
+        });
+        capped
+            .spawn_sleep_task(Duration::from_millis(60_000))
+            .unwrap();
+        let err = capped
+            .spawn_sleep_task(Duration::from_millis(60_000))
+            .unwrap_err();
+        assert_eq!(err.code, "runtime.task-pending-cap");
+        assert_eq!(capped.pending_async_task_count(), 1);
+    }
+
+    #[test]
     fn async_task_ready_clears_completed_task_and_rejects_second_poll() {
         let mut runtime = Runtime::with_permissions(RuntimePermissions {
             async_tasks: true,
@@ -14797,6 +17116,32 @@ describe_read("{}");
         runtime.set_import_base(std::env::temp_dir(), Vec::new());
         let err = runtime
             .eval(r#"import "std/fs.nox" as fs; fs.try_read_text("none.txt");"#)
+            .unwrap_err();
+        assert_eq!(err.code, "permission.denied");
+        assert!(
+            err.message.contains("filesystem capability"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn question_mark_does_not_capture_permission_diagnostics_as_result_err() {
+        let mut runtime = Runtime::new();
+        runtime.set_import_base(std::env::temp_dir(), Vec::new());
+        let err = runtime
+            .eval(
+                r#"
+                import "std/fs.nox" as fs;
+
+                fn load() -> result[str, str] {
+                    let value: str = fs.try_read_text("none.txt")?;
+                    return ok(value);
+                }
+
+                load();
+                "#,
+            )
             .unwrap_err();
         assert_eq!(err.code, "permission.denied");
         assert!(

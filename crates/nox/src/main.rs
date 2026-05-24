@@ -8,7 +8,13 @@ use std::{
     process::{self, Command},
 };
 
-use nox::{manifest::Manifest, Runtime, RuntimePermissions, RuntimeTraceEvent, RuntimeTraceValue};
+use nox::{
+    manifest::{
+        validate_lockfile_for_manifest, DependencyPin, DependencySource, LockedDependency,
+        Lockfile, LockfileValidation, Manifest,
+    },
+    Runtime, RuntimePermissions, RuntimeTraceEvent, RuntimeTraceValue,
+};
 use nox_core::{Diagnostic, Value};
 
 struct CheckFileReport {
@@ -47,6 +53,13 @@ struct ProjectStepReport {
     status: i32,
     stdout: String,
     stderr: String,
+}
+
+struct ProjectLockfileReport {
+    path: String,
+    ok: bool,
+    status: &'static str,
+    diagnostics: Vec<Diagnostic>,
 }
 
 struct ProjectModuleGraph {
@@ -115,6 +128,8 @@ fn main() {
         "check" => process::exit(run_check(args.collect())),
         "test" => process::exit(run_test(args.collect())),
         "fmt" => process::exit(run_fmt(args.collect())),
+        "new" => process::exit(run_new(args.collect())),
+        "fetch" => process::exit(run_fetch(args.collect())),
         "project" => process::exit(run_project(args.collect())),
         "repl" => process::exit(run_repl()),
         "lsp" => {
@@ -171,6 +186,8 @@ fn print_usage_and_exit() -> ! {
         "       nox test [--json] [--filter <substr>] [--retry <N>] [--export-failures <dir>] [--export-failures-classified <dir>] [file-or-dir ...]"
     );
     eprintln!("       nox fmt [--check | --write] <file.nox> [file.nox ...]");
+    eprintln!("       nox new <name> [--dir <path>] [--force]");
+    eprintln!("       nox fetch [--offline] [--cache-dir <dir>]");
     eprintln!("       nox project check [--json]");
     eprintln!("       nox repl");
     eprintln!("       nox lsp");
@@ -184,6 +201,401 @@ fn print_usage_and_exit() -> ! {
     eprintln!("       nox doc <file.nox>");
     eprintln!("       nox host-metadata [--json]");
     process::exit(2);
+}
+
+fn run_new(raw_args: Vec<String>) -> i32 {
+    let mut name = None;
+    let mut target_dir = None;
+    let mut force = false;
+    let mut args = raw_args.into_iter();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--force" => force = true,
+            "--dir" => {
+                let Some(path) = args.next() else {
+                    eprintln!("new: --dir requires a path");
+                    return 2;
+                };
+                if target_dir.replace(PathBuf::from(path)).is_some() {
+                    eprintln!("new: --dir was provided more than once");
+                    return 2;
+                }
+            }
+            other if other.starts_with("--") => {
+                eprintln!("new: unknown flag '{other}'");
+                return 2;
+            }
+            other => {
+                if name.replace(other.to_string()).is_some() {
+                    eprintln!("new: unexpected argument '{other}'");
+                    return 2;
+                }
+            }
+        }
+    }
+
+    let Some(name) = name else {
+        eprintln!("new: missing project name");
+        return 2;
+    };
+    if let Err(err) = validate_new_package_name(&name) {
+        eprintln!("new: {err}");
+        return 2;
+    }
+
+    let target = target_dir.unwrap_or_else(|| PathBuf::from(&name));
+    match create_new_project(&name, &target, force) {
+        Ok(()) => {
+            println!("created Nox project '{}' at {}", name, target.display());
+            0
+        }
+        Err(err) => {
+            eprintln!("new: {err}");
+            2
+        }
+    }
+}
+
+fn run_fetch(raw_args: Vec<String>) -> i32 {
+    let mut offline = false;
+    let mut cache_dir: Option<PathBuf> = None;
+    let mut args = raw_args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--offline" => offline = true,
+            "--cache-dir" => {
+                let Some(path) = args.next() else {
+                    eprintln!("fetch: --cache-dir requires a path");
+                    return 2;
+                };
+                if cache_dir.replace(PathBuf::from(path)).is_some() {
+                    eprintln!("fetch: --cache-dir was provided more than once");
+                    return 2;
+                }
+            }
+            other => {
+                eprintln!("fetch: unknown argument '{other}'");
+                return 2;
+            }
+        }
+    }
+
+    let manifest = match Manifest::discover(Path::new(".")) {
+        Ok(Some(manifest)) => manifest,
+        Ok(None) => {
+            eprintln!("fetch: no nox.toml was found");
+            return 2;
+        }
+        Err(err) => {
+            eprintln!("fetch: {err}");
+            return 2;
+        }
+    };
+
+    if manifest.dependencies.is_empty() {
+        println!("fetch: no dependencies");
+        return 0;
+    }
+
+    let cache_dir = cache_dir.unwrap_or_else(default_module_cache_dir);
+    if let Err(err) = fs::create_dir_all(&cache_dir) {
+        eprintln!(
+            "fetch: failed to create module cache '{}': {err}",
+            cache_dir.display()
+        );
+        return 2;
+    }
+
+    let mut locked = Vec::new();
+    for dependency in &manifest.dependencies {
+        match fetch_dependency(dependency, &cache_dir, offline) {
+            Ok(entry) => {
+                println!("fetch: {} {}", dependency.name, entry.resolved);
+                locked.push(entry);
+            }
+            Err(message) => {
+                eprintln!("fetch: {message}");
+                return 1;
+            }
+        }
+    }
+
+    let lockfile = Lockfile {
+        dependencies: locked,
+    };
+    let lock_path = manifest.root.join(nox::manifest::LOCK_FILE_NAME);
+    if let Err(err) = fs::write(&lock_path, lockfile.to_source()) {
+        eprintln!(
+            "fetch: failed to write lockfile '{}': {err}",
+            lock_path.display()
+        );
+        return 1;
+    }
+    println!("fetch: wrote {}", lock_path.display());
+    0
+}
+
+fn default_module_cache_dir() -> PathBuf {
+    if let Ok(path) = env::var("NOX_MODULE_CACHE") {
+        return PathBuf::from(path);
+    }
+    if let Ok(home) = env::var("HOME") {
+        return PathBuf::from(home)
+            .join(".cache")
+            .join("nox")
+            .join("modules");
+    }
+    env::temp_dir().join("nox").join("modules")
+}
+
+fn fetch_dependency(
+    dependency: &nox::manifest::DependencyDecl,
+    cache_dir: &Path,
+    offline: bool,
+) -> Result<LockedDependency, String> {
+    let source_url = dependency_source_url(&dependency.source);
+    let cache_key = dependency_cache_key(dependency);
+    let cache_path = cache_dir.join(&cache_key);
+
+    if cache_path.exists() {
+        if !offline {
+            run_git(
+                [
+                    "--git-dir",
+                    &cache_path.display().to_string(),
+                    "fetch",
+                    "--tags",
+                    "origin",
+                ],
+                None,
+            )
+            .map_err(|err| {
+                format!(
+                    "dependency '{}' failed to update cache '{}': {err}",
+                    dependency.name,
+                    cache_path.display()
+                )
+            })?;
+        }
+    } else if offline {
+        return Err(format!(
+            "dependency '{}' cache miss in offline mode at '{}'",
+            dependency.name,
+            cache_path.display()
+        ));
+    } else {
+        run_git(
+            [
+                "clone",
+                "--bare",
+                &source_url,
+                &cache_path.display().to_string(),
+            ],
+            None,
+        )
+        .map_err(|err| {
+            format!(
+                "dependency '{}' failed to clone '{}': {err}",
+                dependency.name, source_url
+            )
+        })?;
+    }
+
+    let resolved = resolve_dependency_commit(&cache_path, &dependency.pin).map_err(|err| {
+        format!(
+            "dependency '{}' failed to resolve pin: {err}",
+            dependency.name
+        )
+    })?;
+    let archive = nox::run_git_capture(
+        &[
+            "--git-dir",
+            &cache_path.display().to_string(),
+            "archive",
+            "--format=tar",
+            &resolved,
+        ],
+        None,
+    )
+    .map_err(|err| {
+        format!(
+            "dependency '{}' failed to archive resolved commit: {err}",
+            dependency.name
+        )
+    })?;
+    let content_hash = format!("sha256:{}", nox::sha256_hex_bytes(&archive));
+
+    Ok(LockedDependency {
+        name: dependency.name.clone(),
+        source: dependency.source.clone(),
+        pin: dependency.pin.clone(),
+        resolved,
+        content_hash,
+        cache_key,
+        tool: format!("nox {}", env!("CARGO_PKG_VERSION")),
+    })
+}
+
+fn dependency_source_url(source: &DependencySource) -> String {
+    match source {
+        DependencySource::GitHub(repo) => format!("https://github.com/{repo}.git"),
+        DependencySource::Git(url) => url.clone(),
+    }
+}
+
+fn dependency_cache_key(dependency: &nox::manifest::DependencyDecl) -> String {
+    format!(
+        "{}-{}-{}",
+        sanitize_cache_component(&dependency.name),
+        dependency.source.kind(),
+        sanitize_cache_component(dependency.source.value())
+    )
+}
+
+fn sanitize_cache_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || character == '-' || character == '_' {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn resolve_dependency_commit(cache_path: &Path, pin: &DependencyPin) -> Result<String, String> {
+    let rev = format!("{}^{{commit}}", pin.value());
+    let output = nox::run_git_capture(
+        &[
+            "--git-dir",
+            &cache_path.display().to_string(),
+            "rev-parse",
+            &rev,
+        ],
+        None,
+    )?;
+    Ok(String::from_utf8_lossy(&output).trim().to_string())
+}
+
+fn run_git<const N: usize>(args: [&str; N], cwd: Option<&Path>) -> Result<(), String> {
+    let mut command = Command::new("git");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command
+        .args(args)
+        .output()
+        .map_err(|err| format!("failed to run git: {err}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).trim().to_string())
+    }
+}
+
+fn validate_new_package_name(name: &str) -> Result<(), String> {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return Err("package name cannot be empty".to_string());
+    };
+    if !first.is_ascii_lowercase() {
+        return Err("package name must start with an ASCII lowercase letter".to_string());
+    }
+    if !chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_') {
+        return Err(
+            "package name may contain only ASCII lowercase letters, digits, '-' and '_'"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn create_new_project(name: &str, target: &Path, force: bool) -> Result<(), String> {
+    if target.exists() {
+        if !target.is_dir() {
+            return Err(format!(
+                "target path '{}' is not a directory",
+                target.display()
+            ));
+        }
+        if !force
+            && target
+                .read_dir()
+                .map_err(|err| {
+                    format!(
+                        "failed to read target directory '{}': {err}",
+                        target.display()
+                    )
+                })?
+                .next()
+                .is_some()
+        {
+            return Err(format!(
+                "target directory '{}' already exists and is not empty; pass --force to overwrite scaffold files",
+                target.display()
+            ));
+        }
+    }
+
+    fs::create_dir_all(target).map_err(|err| {
+        format!(
+            "failed to create target directory '{}': {err}",
+            target.display()
+        )
+    })?;
+
+    let files = [
+        ("nox.toml", new_manifest_template(name)),
+        ("src/main.nox", new_main_template()),
+        ("tests/main_test.nox", new_test_template()),
+        ("README.md", new_readme_template(name)),
+    ];
+
+    for (relative, contents) in files {
+        write_scaffold_file(&target.join(relative), contents)?;
+    }
+    Ok(())
+}
+
+fn write_scaffold_file(path: &Path, contents: String) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("scaffold path '{}' has no parent", path.display()))?;
+    if parent.exists() && !parent.is_dir() {
+        return Err(format!(
+            "cannot create '{}' because '{}' is not a directory",
+            path.display(),
+            parent.display()
+        ));
+    }
+    fs::create_dir_all(parent)
+        .map_err(|err| format!("failed to create directory '{}': {err}", parent.display()))?;
+    fs::write(path, contents)
+        .map_err(|err| format!("failed to write scaffold file '{}': {err}", path.display()))
+}
+
+fn new_manifest_template(name: &str) -> String {
+    format!(
+        "[package]\nname = \"{}\"\nversion = \"0.0.1\"\ndescription = \"Nox project\"\n\n[entrypoints]\nmain = \"src/main.nox\"\n\n[modules]\nsource_dirs = [\"src\"]\ntest_dirs = [\"tests\"]\n",
+        name
+    )
+}
+
+fn new_main_template() -> String {
+    "export fn greet(name: str) -> str {\n    return \"hello, \" + name;\n}\n\ngreet(\"nox\");\n"
+        .to_string()
+}
+
+fn new_test_template() -> String {
+    "import \"main.nox\" as app;\n\nfn test_greet() -> bool {\n    return app.greet(\"nox\") == \"hello, nox\";\n}\n"
+        .to_string()
+}
+
+fn new_readme_template(name: &str) -> String {
+    format!("# {name}\n\n```sh\nnox project check\nnox run\nnox test\nnox fmt --check\n```\n")
 }
 
 fn run_host_metadata(raw_args: Vec<String>) -> i32 {
@@ -292,70 +704,29 @@ fn run_doc(raw_args: Vec<String>) -> i32 {
     writeln!(&mut out, "# `{}`", path).unwrap();
     writeln!(&mut out).unwrap();
 
-    let mut in_doc_block = false;
-    let mut doc_lines: Vec<String> = Vec::new();
-    let mut emitted = 0_usize;
-    for line in source.lines() {
-        let trimmed = line.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("///") {
-            let value = rest.strip_prefix(' ').unwrap_or(rest);
-            doc_lines.push(value.to_string());
-            in_doc_block = true;
-            continue;
+    let declarations = doc_declarations(&source);
+    for declaration in &declarations {
+        writeln!(&mut out, "## {}", declaration.signature).unwrap();
+        writeln!(&mut out).unwrap();
+        writeln!(
+            &mut out,
+            "Kind: **{}**. Visibility: **{}**.",
+            declaration.kind, declaration.visibility
+        )
+        .unwrap();
+        if let Some(call_return_type) = &declaration.call_return_type {
+            writeln!(&mut out, "Call return: **{call_return_type}**.").unwrap();
         }
-        if in_doc_block {
-            in_doc_block = false;
-        }
-        let exported_fn = trimmed.starts_with("export fn ");
-        let local_fn = trimmed.starts_with("fn ") && !exported_fn;
-        let exported_record = trimmed.starts_with("export record ");
-        let local_record = trimmed.starts_with("record ") && !exported_record;
-        let exported_enum = trimmed.starts_with("export enum ");
-        let local_enum = trimmed.starts_with("enum ") && !exported_enum;
-        let exported_type = trimmed.starts_with("export type ");
-        let local_type = trimmed.starts_with("type ") && !exported_type;
-        let is_decl = exported_fn
-            || local_fn
-            || exported_record
-            || local_record
-            || exported_enum
-            || local_enum
-            || exported_type
-            || local_type;
-        if is_decl {
-            let visibility = if exported_fn || exported_record || exported_enum || exported_type {
-                "exported"
-            } else {
-                "local"
-            };
-            let kind = if exported_fn || local_fn {
-                "fn"
-            } else if exported_record || local_record {
-                "record"
-            } else if exported_enum || local_enum {
-                "enum"
-            } else {
-                "type"
-            };
-            let signature = trimmed.trim_end_matches(" {").trim_end_matches('{').trim();
-            writeln!(&mut out, "## {signature}").unwrap();
-            writeln!(&mut out).unwrap();
-            writeln!(&mut out, "Kind: **{kind}**. Visibility: **{visibility}**.").unwrap();
-            writeln!(&mut out).unwrap();
-            if !doc_lines.is_empty() {
-                for doc in &doc_lines {
-                    writeln!(&mut out, "{}", doc).unwrap();
-                }
-                writeln!(&mut out).unwrap();
+        writeln!(&mut out).unwrap();
+        if !declaration.docs.is_empty() {
+            for doc in &declaration.docs {
+                writeln!(&mut out, "{doc}").unwrap();
             }
-            doc_lines.clear();
-            emitted += 1;
-        } else if !doc_lines.is_empty() && !trimmed.is_empty() && !trimmed.starts_with("//") {
-            doc_lines.clear();
+            writeln!(&mut out).unwrap();
         }
     }
 
-    if emitted == 0 {
+    if declarations.is_empty() {
         writeln!(
             &mut out,
             "_No fn / record / enum / type declarations found._"
@@ -365,6 +736,218 @@ fn run_doc(raw_args: Vec<String>) -> i32 {
 
     print!("{out}");
     0
+}
+
+struct DocDeclaration {
+    signature: String,
+    kind: &'static str,
+    visibility: &'static str,
+    call_return_type: Option<String>,
+    docs: Vec<String>,
+}
+
+fn doc_declarations(source: &str) -> Vec<DocDeclaration> {
+    let bytes = source.as_bytes();
+    let mut declarations = Vec::new();
+    let mut pending_docs = Vec::new();
+    let mut index = 0;
+    let mut depth = 0usize;
+    let mut line_start = true;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                pending_docs.clear();
+                line_start = false;
+                index = skip_string_literal(source, index);
+            }
+            b'/' if index + 1 < bytes.len() && bytes[index + 1] == b'/' => {
+                let line_end = source[index..]
+                    .find('\n')
+                    .map(|offset| index + offset)
+                    .unwrap_or(source.len());
+                if depth == 0 && line_start && bytes.get(index + 2) == Some(&b'/') {
+                    let doc = source[index + 3..line_end]
+                        .strip_prefix(' ')
+                        .unwrap_or(&source[index + 3..line_end])
+                        .to_string();
+                    pending_docs.push(doc);
+                } else if !source[index..line_end].trim().is_empty() {
+                    pending_docs.clear();
+                }
+                index = line_end;
+            }
+            b'{' => {
+                pending_docs.clear();
+                depth += 1;
+                line_start = false;
+                index += 1;
+            }
+            b'}' => {
+                pending_docs.clear();
+                depth = depth.saturating_sub(1);
+                line_start = false;
+                index += 1;
+            }
+            b'\n' => {
+                line_start = true;
+                index += 1;
+            }
+            byte if byte.is_ascii_whitespace() => {
+                index += 1;
+            }
+            byte if depth == 0 && is_identifier_start_byte(byte) => {
+                let Some((declaration, next)) = parse_doc_declaration(source, index, &pending_docs)
+                else {
+                    pending_docs.clear();
+                    index = skip_identifier(source, index);
+                    line_start = false;
+                    continue;
+                };
+                declarations.push(declaration);
+                pending_docs.clear();
+                index = next;
+                line_start = false;
+            }
+            _ => {
+                pending_docs.clear();
+                line_start = false;
+                index += 1;
+            }
+        }
+    }
+    declarations
+}
+
+fn parse_doc_declaration(
+    source: &str,
+    start: usize,
+    docs: &[String],
+) -> Option<(DocDeclaration, usize)> {
+    let bytes = source.as_bytes();
+    let (first, mut index) = read_identifier(source, start)?;
+    let exported = first == "export";
+    let kind_start = if exported {
+        index = skip_ws_bytes(source, index);
+        index
+    } else {
+        start
+    };
+    let (first_kind, after_first_kind) = read_identifier(source, kind_start)?;
+    let (kind, after_kind, is_async) = if first_kind == "async" {
+        let fn_start = skip_ws_bytes(source, after_first_kind);
+        let (kind, after_kind) = read_identifier(source, fn_start)?;
+        (kind, after_kind, true)
+    } else {
+        (first_kind, after_first_kind, false)
+    };
+    let kind = match kind.as_str() {
+        "fn" | "record" | "enum" | "type" | "trait" => kind,
+        _ => return None,
+    };
+    if is_async && kind != "fn" {
+        return None;
+    }
+    let mut end = after_kind;
+    while end < bytes.len() {
+        match bytes[end] {
+            b'"' => end = skip_string_literal(source, end),
+            b'{' if kind != "type" => break,
+            b';' if kind == "type" => {
+                end += 1;
+                break;
+            }
+            b'\n' | b'\r' | b'\t' | b' ' => end += 1,
+            _ => end += 1,
+        }
+    }
+    if end <= after_kind || end > source.len() {
+        return None;
+    }
+    let signature_source = source[start..end].trim().trim_end_matches('{');
+    let signature = signature_source
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let call_return_type = if is_async {
+        async_doc_call_return_type(signature_source)
+    } else {
+        None
+    };
+    Some((
+        DocDeclaration {
+            signature,
+            kind: match kind.as_str() {
+                "fn" => "fn",
+                "record" => "record",
+                "enum" => "enum",
+                "type" => "type",
+                "trait" => "trait",
+                _ => return None,
+            },
+            visibility: if exported { "exported" } else { "local" },
+            call_return_type,
+            docs: docs.to_vec(),
+        },
+        end,
+    ))
+}
+
+fn async_doc_call_return_type(signature_source: &str) -> Option<String> {
+    let return_type = signature_source.rsplit_once("->")?.1.trim();
+    if return_type.is_empty() {
+        return None;
+    }
+    Some(format!("task[{return_type}]"))
+}
+
+fn skip_string_literal(source: &str, mut index: usize) -> usize {
+    let bytes = source.as_bytes();
+    index += 1;
+    while index < bytes.len() {
+        if bytes[index] == b'\\' && index + 1 < bytes.len() {
+            index += 2;
+        } else if bytes[index] == b'"' {
+            index += 1;
+            break;
+        } else {
+            index += 1;
+        }
+    }
+    index
+}
+
+fn read_identifier(source: &str, start: usize) -> Option<(String, usize)> {
+    let bytes = source.as_bytes();
+    if start >= bytes.len() || !is_identifier_start_byte(bytes[start]) {
+        return None;
+    }
+    let mut end = start + 1;
+    while end < bytes.len() && is_identifier_continue_byte(bytes[end]) {
+        end += 1;
+    }
+    Some((source[start..end].to_string(), end))
+}
+
+fn skip_identifier(source: &str, start: usize) -> usize {
+    read_identifier(source, start)
+        .map(|(_, end)| end)
+        .unwrap_or(start + 1)
+}
+
+fn skip_ws_bytes(source: &str, mut index: usize) -> usize {
+    let bytes = source.as_bytes();
+    while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+        index += 1;
+    }
+    index
+}
+
+fn is_identifier_start_byte(byte: u8) -> bool {
+    byte.is_ascii_alphabetic() || byte == b'_'
+}
+
+fn is_identifier_continue_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
 fn collect_required_capabilities(source: &str) -> Vec<&'static str> {
@@ -1402,6 +1985,17 @@ fn run_project(raw_args: Vec<String>) -> i32 {
         return run_project_check_json(&manifest);
     }
 
+    let lockfile = project_lockfile_report(&manifest);
+    if lockfile.status != "not_required" {
+        println!("project check: lockfile");
+    }
+    if !lockfile.ok {
+        for diagnostic in &lockfile.diagnostics {
+            println!("project check: {diagnostic}");
+        }
+        return 1;
+    }
+
     println!("project check: check");
     let check_status = run_check(Vec::new());
     println!("project check: test");
@@ -1420,6 +2014,7 @@ fn run_project(raw_args: Vec<String>) -> i32 {
 }
 
 fn run_project_check_json(manifest: &Manifest) -> i32 {
+    let lockfile = project_lockfile_report(manifest);
     let exe = match env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
@@ -1455,8 +2050,8 @@ fn run_project_check_json(manifest: &Manifest) -> i32 {
     })
     .collect::<Vec<_>>();
 
-    let ok = steps.iter().all(|step| step.status == 0);
-    println!("{}", project_check_json(manifest, &steps));
+    let ok = lockfile.ok && steps.iter().all(|step| step.status == 0);
+    println!("{}", project_check_json(manifest, &lockfile, &steps));
     if ok {
         0
     } else if steps.iter().any(|step| step.status == 2) {
@@ -2368,9 +2963,23 @@ fn write_stack_frames_json(json: &mut String, diagnostic: &Diagnostic) {
     json.push(']');
 }
 
-fn project_check_json(manifest: &Manifest, steps: &[ProjectStepReport]) -> String {
+fn project_lockfile_report(manifest: &Manifest) -> ProjectLockfileReport {
+    let validation: LockfileValidation = validate_lockfile_for_manifest(manifest);
+    ProjectLockfileReport {
+        path: validation.path.display().to_string(),
+        ok: validation.ok,
+        status: validation.status,
+        diagnostics: validation.diagnostics,
+    }
+}
+
+fn project_check_json(
+    manifest: &Manifest,
+    lockfile: &ProjectLockfileReport,
+    steps: &[ProjectStepReport],
+) -> String {
     let mut json = String::new();
-    let ok = steps.iter().all(|step| step.status == 0);
+    let ok = lockfile.ok && steps.iter().all(|step| step.status == 0);
     let graph = project_module_graph(manifest);
     write!(
         &mut json,
@@ -2385,6 +2994,8 @@ fn project_check_json(manifest: &Manifest, steps: &[ProjectStepReport]) -> Strin
     write_project_entrypoints_json(&mut json, manifest);
     json.push(',');
     write_project_capabilities_json(&mut json, manifest);
+    json.push(',');
+    write_project_dependencies_json(&mut json, manifest, lockfile);
     json.push(',');
     write_project_module_graph_json(&mut json, &graph);
     json.push_str(",\"steps\":[");
@@ -2449,9 +3060,15 @@ fn snapshot_diff_from_diagnostic(diagnostic: &Diagnostic) -> Option<(String, Str
 
 fn write_project_schema_validation_json(json: &mut String) {
     json.push_str("\"schema_validation\":{\"ok\":true,\"manifest_sections\":[");
-    for (index, section) in ["package", "entrypoints", "modules", "runtime"]
-        .iter()
-        .enumerate()
+    for (index, section) in [
+        "package",
+        "entrypoints",
+        "modules",
+        "dependencies",
+        "runtime",
+    ]
+    .iter()
+    .enumerate()
     {
         if index > 0 {
             json.push(',');
@@ -2459,6 +3076,50 @@ fn write_project_schema_validation_json(json: &mut String) {
         write!(json, "\"{section}\"").expect("writing to String cannot fail");
     }
     json.push_str("],\"unknown_sections\":\"rejected\",\"unknown_keys\":\"rejected\"}");
+}
+
+fn write_project_dependencies_json(
+    json: &mut String,
+    manifest: &Manifest,
+    lockfile: &ProjectLockfileReport,
+) {
+    json.push_str("\"dependencies\":{\"declared\":[");
+    for (index, dependency) in manifest.dependencies.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        write!(
+            json,
+            "{{\"name\":\"{}\",\"source\":{{\"kind\":\"{}\",\"value\":\"{}\"}},\"pin\":{{\"kind\":\"{}\",\"value\":\"{}\"}}}}",
+            json_escape(&dependency.name),
+            dependency.source.kind(),
+            json_escape(dependency.source.value()),
+            dependency.pin.kind(),
+            json_escape(dependency.pin.value())
+        )
+        .expect("writing to String cannot fail");
+    }
+    write!(
+        json,
+        "],\"lockfile\":{{\"path\":\"{}\",\"ok\":{},\"status\":\"{}\",\"diagnostics\":[",
+        json_escape(&lockfile.path),
+        lockfile.ok,
+        lockfile.status
+    )
+    .expect("writing to String cannot fail");
+    for (index, diagnostic) in lockfile.diagnostics.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        write!(
+            json,
+            "{{\"code\":\"{}\",\"message\":\"{}\"}}",
+            json_escape(diagnostic.code),
+            json_escape(&diagnostic.message)
+        )
+        .expect("writing to String cannot fail");
+    }
+    json.push_str("]}}");
 }
 
 fn project_module_graph(manifest: &Manifest) -> ProjectModuleGraph {

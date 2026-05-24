@@ -16,7 +16,14 @@ scripts/release-gate.sh
 scripts/local-dist-smoke.sh
 ```
 
-The release gate covers Cargo checks, CLI smoke tests, project checks, embedding regression, robustness smoke, benchmark smoke, Markdown link checks, and whitespace checks.
+The release gate covers Cargo checks, CLI smoke tests, project checks,
+compatibility golden checks, embedding regression, robustness smoke, benchmark
+smoke, Markdown link checks, and whitespace checks. The compatibility golden
+checks live in `scripts/compatibility-golden.sh`; they pin parser/formatter
+surface, CLI diagnostic JSON, LSP diagnostic JSON, `nox doc` output, project
+lockfile JSON, and host-metadata API JSON. Focused release-gate tests also keep
+the parser AST golden, C ABI enum values, and async Rust API task behavior
+explicitly visible.
 
 ## Editor Tooling
 

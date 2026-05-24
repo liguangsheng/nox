@@ -6,6 +6,164 @@
 
 ## [未发布]
 
+## [0.0.5] — 2026-05-24
+
+### 工具和发布维护
+
+- 发布：新增 `scripts/cross-cli-smoke.sh` 和 GitHub Actions `Cross CLI smoke (x86_64 musl)`，
+  为 `x86_64-unknown-linux-musl` 建立 CLI-only 交叉构建与 hello smoke；该目标暂不扩大
+  嵌入式 SDK / C ABI 资产承诺。
+- 发布：`scripts/build-release-assets.sh` 新增 `CLI_ONLY_TARGET_TRIPLES`，可为已 smoke
+  的 CLI-only 目标生成 `nox-cli-*` tarball；`TARGET_TRIPLES=""` 可用于只验证 CLI-only
+  产物路径。
+- 发布：明确本 release 线暂缓 crates.io 发布；`nox` 已被其他项目占用，`nox_core`
+  会解析到已有的 `nox-core` crate。当前继续以 GitHub tag install、release tarball 和源码
+  checkout 作为支持的分发路径。
+- 工具：新增 `scripts/compatibility-golden.sh` 并接入 release gate，显式固定
+  parser/formatter 表面、CLI diagnostic JSON、LSP diagnostic JSON、`nox doc` 输出、
+  project lockfile JSON 和 host-metadata API JSON；release gate 同时新增 parser AST
+  golden、C ABI enum 数值和 async Rust API task focused tests，避免语言扩展后机器可读
+  表面静默漂移。
+- 发布：新增 `scripts/release-candidate-readiness.sh` 并接入 release gate / release audit，
+  在正式 release-prep commit 前固定 `v0.0.4` 当前生产版本、`v0.0.5` 下一候选流程、
+  `[未发布]` CHANGELOG、gnu + musl CLI-only 资产口径、实验/暂缓功能标注和 crates.io
+  暂缓决策，避免候选收敛阶段把 checkpoint、RC 和 production release 承诺混在一起。
+- CLI：新增 `nox new <name> [--dir <path>] [--force]`，生成包含 `nox.toml`、
+  `src/main.nox`、`tests/main_test.nox` 和 `README.md` 的最小项目。默认拒绝覆盖非空
+  目标目录；`--force` 只覆盖脚手架文件，不删除未知用户文件。
+- 标准库：`std/http.nox` 新增 `request` / `request_binary` 通用入口，支持自定义请求
+  headers，并返回 response headers；response header name 统一小写，重复 header 用
+  `", "` 折叠。仍仅支持明文 HTTP/1.1，继续要求 `network` capability。
+- 标准库：新增纯计算 `std/jsonl.nox` 和 `std/hash.nox`，提供 JSON Lines
+  `parse_lines` / `format_lines` 以及 SHA-256 `sha256_hex` / `sha256_text`；CSV/TSV
+  模块新增 eager 多行 `parse_rows` / `format_rows`，错误信息包含 1-based 行号。
+- 标准库：`std/hash.nox` 新增纯计算 HMAC-SHA256 helper：
+  `hmac_sha256_hex(key: [int], bytes: [int]) -> str` 和
+  `hmac_sha256_text(key: str, value: str) -> str`，保持无权限、零第三方依赖。
+- LSP：`initialize` 新增 `workspaceSymbolProvider`，`workspace/symbol` 返回项目内顶层
+  `fn` / `record` / `enum` / `trait` / `type` 声明；发现 manifest 时按 `modules.source_dirs`
+  扫描，并合并已打开文档 overlay。
+- LSP：`textDocument/definition` 支持跨文件跳转到 imported module 的 exported 顶层声明，
+  覆盖 `import "path" as alias; alias.member` 与直接 `import "path"; Symbol`；查找遵循
+  manifest `modules.source_dirs` 和 open-document overlay，虚拟 stdlib module 保守返回
+  `null`。
+- LSP：新增 `renameProvider` 与 `textDocument/prepareRename` / `textDocument/rename`
+  当前文件保守 rename。当前只重命名顶层 symbol；如果存在同名局部声明或参数，prepare/rename
+  返回 `null`，避免跨作用域误改。跨文件 rename 仍未开放。
+- LSP：`textDocument/completion` 在 `import "..."` 字符串内会提示 `std/*` 虚拟模块和
+  manifest `modules.source_dirs` 下的项目模块路径。
+- LSP：普通 `textDocument/completion` 现在会提示 manifest `modules.source_dirs` 下项目
+  `fn` / `record` / `enum` / `trait` / `type` 顶层声明，并继续排除项目级 `let` / `const`
+  以降低噪声。
+- LSP：`value.` completion 新增保守的当前文档 method 建议：当 receiver 有显式
+  `let value: Type` 注解时，会提示第一个参数为 `Type` 的 record-style 函数和
+  `impl Trait for Type` 中的方法；无法确定 receiver 类型时仍返回空结果。
+- LSP：hover 与 signature help 现在对 `async fn` 展示源码返回类型和调用侧
+  `task[T]` 返回信息；`std/fs.nox` / `std/http.nox` 新增的 `_async` helper 也会出现在
+  namespace completion 中。
+- LSP：hover 在 namespace import alias 上显示 module source 和 exported surface，例如
+  `module std/fs.nox` 及其导出成员列表；项目模块同样只展示导出表面。
+- LSP：workspace symbol 和项目顶层 completion 现在复用进程内 symbol graph cache；
+  `didOpen` / `didChange` 会失效并重建缓存，避免编辑器看到陈旧顶层声明。
+- LSP：publishDiagnostics 增加进程内诊断缓存；缓存绑定当前 LSP 文档 revision 和 source
+  hash，`didOpen` / `didChange` 会让旧诊断失效，避免 imported open document 改动后沿用旧结果。
+- 语言：新增静态 trait MVP：parser/AST 接受 `trait` 和 `impl Trait for Type`，typechecker
+  校验 required method、impl 完整性、签名匹配、重复 impl 和 `T: Trait` bound；`nox fmt`、
+  `nox doc` 和 LSP document symbol 已识别 trait 声明。该能力仍不包含动态 dispatch、trait
+  object、blanket impl 或 associated type。impl method 会编译为内部 mangled 函数名，并按
+  receiver nominal type 分派，因此不同类型可以实现同名 trait method；当前 MVP 仍保守拒绝
+  impl method 与顶层函数同名。
+- 标准库：`std/array.nox` 新增实验性 `Eq` trait、基础 primitive impl，以及 trait-bound
+  helper `contains_equal<T: Eq>` / `dedupe_equal<T: Eq>`；旧
+  `contains_value<T: Equatable>` / `dedupe<T: Equatable>` 保持兼容。
+- 文档：新增 ADR 0026，确定 Nox 包生态第一阶段不做自建 registry，改走 GitHub /
+  git URL module、版本 pin、lockfile、cache 和离线复现路线。
+- 文档：新增 ADR 0027，确定后续语言抽象采用单一 `trait` 关键字和纯静态 trait 系统；
+  旧 ADR 0020 的内建 marker 约束保留为 v0.0.x 兼容层。
+- 文档：新增 ADR 0028，确认 Nox 继续以 `result` / `option` / `?` / diagnostic 为错误模型；
+  不引入 `throw` / `catch` / `finally`，并暂缓 Rust 风格 `try {}` block。阶段 65 改为
+  result/option helper、文档和边界测试收敛。
+- 标准库：`std/option.nox` 新增 `map` / `and_then`，`std/result.nox` 新增 `map` /
+  `map_err` / `and_then`，用于在不引入 `try {}` block 或异常机制的前提下组合可恢复值。
+- 文档：新增 ADR 0029，暂缓内建宏系统；当前推荐用函数、trait、标准库 helper 或显式外部
+  codegen 处理重复样板，不引入 `macro`、attribute、procedural macro 或编译期执行。
+- 文档：新增 ADR 0030，确定 async/await 采用分阶段路线：先 awaitable task runtime，再
+  `async fn` / `await` 语法；第一轮保持单线程、显式 capability、无 IO reactor，也不隐式
+  授权文件、网络、环境、计时器或进程能力。
+- 语言：新增 `task[T]`、`async fn` 和 `await` 的最小语法闭环；`await` 只能在
+  `async fn` 内消费 `task[T]`，top-level 未消费 task 以 `async.top-level-task` 诊断拒绝。
+  `async fn -> result[...]` / `option[...]` 内的后缀 `?` 按声明 payload 返回类型传播，
+  继续不捕获 permission denied、resource cap 或其它 runtime diagnostic。
+  `task_sleep(ms) -> task[null]` 和 `std/task.nox` 的 `sleep(ms) -> task[null]` 已接入
+  与 `task_sleep_ms` 相同的 runtime task 表、`async task` capability、pending 上限和清理规则。
+  async 函数失败后会清理本次 eval 新建的 awaitable sleep task，并保留 awaitable 边界上的
+  host/script stack frame。
+  `nox doc` 已识别 `async fn`，并在保留源码签名的同时展示调用侧 `task[T]` 返回类型；
+  新增 `examples/async.nox` 展示最小 async/await 用法。
+  当前仍不提供 IO reactor、top-level await、async trait 或跨 C ABI task handle。
+- 标准库：`std/fs.nox` 和 `std/http.nox` 新增 `_async` 后缀 wrapper，供 `async fn`
+  内 await 文件系统和 HTTP helper 的结果。wrapper 只包裹现有同步 helper，不引入 IO
+  reactor、后台调度或隐式授权；await 后仍复用原有 filesystem / filesystem_write /
+  network capability、allowlist、mock、timeout、响应上限和 diagnostic。
+- Rust API：`nox::Runtime` 新增 `spawn_sleep_task`、`poll_async_task`、
+  `cancel_async_task` 和 `AsyncTaskPoll`，让嵌入宿主可以用与 `std/task.nox` 相同的权限、
+  pending 上限、unknown-id 诊断和清理规则驱动单 runtime task 表。C ABI 当前仍不暴露
+  runtime task handle。
+- Manifest：`nox.toml` 新增 `[dependencies]` schema skeleton，支持 pinned GitHub /
+  git URL dependency 声明；`project check` 现在要求有依赖的项目提供匹配的 `nox.lock`，
+  并在 `project check --json` 中报告 lockfile 状态。当前不会下载依赖或接入 import resolution。
+- CLI：新增 `nox fetch [--offline] [--cache-dir <dir>]`，显式下载 pinned GitHub/git
+  dependency 到 module cache，解析 tag/rev 到完整 commit，计算 `sha256:<hex>` content hash，
+  并写入 `nox.lock`。`--offline` 只消费已有 cache，cache miss 或 corrupt cache 会失败；
+  下载动作不授予脚本运行阶段的 runtime permissions。
+- 模块：`run`、`check`、`test` 和 LSP diagnostics 开始支持
+  `import "<dependency>/<path>.nox"`，从 `nox.lock` 指向的 module cache 读取 pinned external
+  module，并校验 cache archive hash。缺 lockfile、cache miss、cache corrupt 或 hash mismatch
+  都会诊断失败；普通命令不会静默联网。
+- CLI：`nox doc` 改为结构化顶层声明扫描，支持跨行函数签名的 doc 输出，并避免把函数体内
+  nested declaration 误作为顶层 API。stdlib index 测试现在同时校验 runtime registry 中的
+  std module 是否都列入中英文索引。
+- 工具：ADR 0025 将 release-gate CLI 二进制大小上限从 2.75 MiB 小幅校准到
+  2.8125 MiB（2,949,120 bytes），吸收 LSP 跨文件 definition 与当前文件 rename 的明确工具面
+  增量；`nox_core` 1.5 MiB 上限和零第三方运行时依赖约束不变。
+- 工具：阶段 56 的 manifest dependency / `nox.lock` 校验和 release gate lockfile guardrail
+  让 release CLI 实测增至约 2,958,736 bytes；ADR 0025 将默认 CLI size cap 继续小幅校准到
+  2.84375 MiB（2,981,888 bytes），`nox_core` 1.5 MiB 上限和零第三方运行时依赖约束不变。
+- 工具：阶段 57-58 的 `nox fetch`、module cache、external import resolution 和 cache hash
+  校验让 release CLI 实测约 2,982,960 bytes；已移除 CLI 内重复 SHA-256 实现并复用库内 helper，
+  ADR 0025 将默认 CLI size cap 小幅校准到 2.8515625 MiB（2,990,080 bytes）。`nox_core`
+  1.5 MiB 上限和零第三方运行时依赖约束不变。
+- 工具：阶段 60 的 LSP import path completion、项目顶层 symbol completion、module alias
+  hover 和 diagnostic cache 让 release CLI 实测约 3,013,504 bytes；ADR 0025 将默认 CLI
+  size cap 小幅校准到 2.875 MiB（3,014,656 bytes）。`nox_core` 1.5 MiB 上限和零第三方
+  运行时依赖约束不变。
+- 工具：阶段 62 静态 trait MVP 和 impl method receiver dispatch 让 release CLI 实测约
+  3,108,032 bytes；ADR 0025 将默认 CLI size cap 小幅校准到 2.96875 MiB
+  （3,112,960 bytes）。`nox_core` 1.5 MiB 上限和零第三方运行时依赖约束不变。
+- 工具：阶段 68-70 async/await MVP、awaitable runtime task 桥接、async diagnostics 和
+  `nox doc` async 展示让 release CLI 实测约 3,135,568 bytes；ADR 0025 将默认 CLI size
+  cap 小幅校准到 3.0 MiB（3,145,728 bytes）。`nox_core` 1.5 MiB 上限和零第三方运行时依赖
+  约束不变。
+- 发布：`scripts/release-gate.sh` 新增 module ecosystem regression 门禁，显式运行
+  project check lockfile JSON、`nox fetch` offline/cache、external import cache/hash mismatch
+  和集成式 `nox lsp` external import 回归测试。
+- 文档：补充 module cache 定位、清理和锁网 CI 复现说明；external import 的 cache missing /
+  corrupt / hash mismatch 诊断已有 CLI JSON 回归覆盖。
+- 发布：`scripts/build-release-assets.sh` 支持 `TARGET_TRIPLES="..."` 目标矩阵，默认仍只构建
+  当前 Rust host triple；README 和 release checklist 明确非 host 目标在 CI/smoke 覆盖前
+  属于 best-effort。
+- 发布：补齐 `nox` / `nox_core` crates.io package metadata 和 crate README；`nox`
+  对 `nox_core` 同时使用本地 `path` 与精确版本约束。README 区分 crates.io install、
+  GitHub tag install 和本地 checkout install，并记录当前 `nox` package name 已被 crates.io
+  上其他项目占用；release checklist 新增 crates.io dry-run、registry name 预检与 Rust API /
+  C ABI / CLI JSON / diagnostic code 的 SemVer 风险审计。
+- 文档：新增中英文 cookbook，按项目创建、CLI stdin/stdout/stderr/exit、JSON/TOML
+  配置、文件权限、HTTP、CSV/TSV/JSONL 类数据、测试 helper 和 embedding host function
+  组织现有示例与任务配方。
+- CI：GitHub Actions workflow 升级到 `actions/checkout@v6` 与 `actions/cache@v5`，
+  消除 Node.js 20 action runtime deprecation 注解，并提前适配 GitHub-hosted runner
+  默认切换到 Node.js 24 的时间线。
+
 ## [0.0.4] — 2026-05-24
 
 ### 稳定和兼容改进

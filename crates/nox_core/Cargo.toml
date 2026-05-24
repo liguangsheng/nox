@@ -1,6 +1,11 @@
 [package]
 name = "nox_core"
+description = "Embeddable compiler, type checker, VM, Rust API, and C ABI for Nox"
 edition.workspace = true
+repository = "https://github.com/liguangsheng/nox"
+readme = "README.md"
+keywords = ["scripting", "language", "vm", "embedding"]
+categories = ["compilers", "development-tools::ffi"]
 license.workspace = true
 version.workspace = true
 

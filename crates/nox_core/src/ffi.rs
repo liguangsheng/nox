@@ -37,6 +37,7 @@ pub enum NoxCoreValueKind {
     Json = 11,
     Tuple = 12,
     Enum = 13,
+    Task = 14,
 }
 
 #[repr(C)]
@@ -385,6 +386,7 @@ impl TryFrom<NoxCoreValueKind> for ScalarType {
             | NoxCoreValueKind::Tuple
             | NoxCoreValueKind::Enum
             | NoxCoreValueKind::Function
+            | NoxCoreValueKind::Task
             | NoxCoreValueKind::Array
             | NoxCoreValueKind::Map
             | NoxCoreValueKind::Record
@@ -456,6 +458,10 @@ impl From<Value> for NoxCoreValue {
                 result_handle: Box::into_raw(Box::new(NoxCoreResultHandle { result })),
                 ..Self::null()
             },
+            Value::Task(_) => Self {
+                kind: NoxCoreValueKind::Task,
+                ..Self::null()
+            },
             Value::Enum(_) => Self {
                 kind: NoxCoreValueKind::Enum,
                 ..Self::null()
@@ -482,6 +488,7 @@ impl TryFrom<NoxCoreValue> for Value {
             | NoxCoreValueKind::Tuple
             | NoxCoreValueKind::Enum
             | NoxCoreValueKind::Function
+            | NoxCoreValueKind::Task
             | NoxCoreValueKind::Array
             | NoxCoreValueKind::Map
             | NoxCoreValueKind::Record

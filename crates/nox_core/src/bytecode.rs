@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fmt::Write,
 };
 
@@ -44,6 +44,7 @@ pub(crate) enum Instruction {
     },
     Function {
         name: String,
+        is_async: bool,
         type_params: Vec<String>,
         params: Vec<Param>,
         return_type: Type,
@@ -66,11 +67,20 @@ pub(crate) enum Instruction {
         return_type: Type,
         span: Span,
     },
+    Await {
+        span: Span,
+    },
     MatchPattern {
         pattern: MatchCaseValue,
         span: Span,
     },
     Call {
+        arg_count: usize,
+        span: Span,
+    },
+    TraitMethodCall {
+        method_name: String,
+        dispatch: Vec<TraitMethodDispatch>,
         arg_count: usize,
         span: Span,
     },
@@ -201,6 +211,12 @@ pub(crate) enum Instruction {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TraitMethodDispatch {
+    pub(crate) receiver_type: String,
+    pub(crate) function_name: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArrayInstructionElement {
     Expr,
@@ -256,8 +272,18 @@ impl Instruction {
                 )
             }
             Self::Question { return_type, .. } => format!("Question return={return_type}"),
+            Self::Await { .. } => "Await".to_string(),
             Self::MatchPattern { pattern, .. } => format!("MatchPattern {pattern:?}"),
             Self::Call { arg_count, .. } => format!("Call argc={arg_count}"),
+            Self::TraitMethodCall {
+                method_name,
+                arg_count,
+                dispatch,
+                ..
+            } => format!(
+                "TraitMethodCall {method_name} argc={arg_count} targets={}",
+                dispatch.len()
+            ),
             Self::JsonDecode { target_type, .. } => format!("JsonDecode {target_type}"),
             Self::Array {
                 element_type,
@@ -373,10 +399,15 @@ pub(crate) enum StatementInstruction {
     },
     Function {
         name: String,
+        is_async: bool,
         type_params: Vec<String>,
         params: Vec<Param>,
         return_type: Type,
         body: BytecodeModule,
+        span: Span,
+    },
+    Functions {
+        functions: Vec<StatementInstruction>,
         span: Span,
     },
     Record {
@@ -500,9 +531,18 @@ pub(crate) enum ByteExprKind {
         value: Box<ByteExpr>,
         return_type: Type,
     },
+    Await {
+        value: Box<ByteExpr>,
+    },
     Call {
         callee: Box<ByteExpr>,
         args: Vec<ByteExpr>,
+    },
+    TraitMethodCall {
+        method_name: String,
+        receiver: Box<ByteExpr>,
+        args: Vec<ByteExpr>,
+        dispatch: Vec<TraitMethodDispatch>,
     },
     JsonDecode {
         value: Box<ByteExpr>,
@@ -601,6 +641,7 @@ pub(crate) struct ByteStringInterpolationPart {
 
 pub(crate) struct Compiler {
     enum_names: HashSet<String>,
+    trait_method_dispatch: HashMap<String, Vec<TraitMethodDispatch>>,
     json_decode_schema: JsonDecodeSchema,
 }
 
@@ -610,6 +651,18 @@ pub(crate) fn verify(module: &BytecodeModule) -> Result<(), Diagnostic> {
 
 fn verifier_error(message: impl Into<String>, span: Span) -> Diagnostic {
     Diagnostic::new(message, span).with_code("bytecode.verifier")
+}
+
+fn impl_method_function_name(trait_name: &str, receiver_type: &str, method_name: &str) -> String {
+    format!(
+        "$impl${}:{}${}:{}${}:{}",
+        trait_name.len(),
+        trait_name,
+        receiver_type.len(),
+        receiver_type,
+        method_name.len(),
+        method_name
+    )
 }
 
 struct Verifier<'a> {
@@ -764,8 +817,18 @@ impl<'a> Verifier<'a> {
                 self.pop(1, *span)?;
                 self.push(1);
             }
+            Instruction::Await { span } => {
+                self.pop(1, *span)?;
+                self.push(1);
+            }
             Instruction::MatchPattern { span, .. } => self.require(1, *span)?,
             Instruction::Call { arg_count, span } => {
+                self.pop(arg_count + 1, *span)?;
+                self.push(1);
+            }
+            Instruction::TraitMethodCall {
+                arg_count, span, ..
+            } => {
                 self.pop(arg_count + 1, *span)?;
                 self.push(1);
             }
@@ -941,6 +1004,32 @@ impl Compiler {
                 _ => None,
             })
             .collect();
+        let mut trait_method_dispatch: HashMap<String, Vec<TraitMethodDispatch>> = HashMap::new();
+        for statement in &module.statements {
+            let Stmt::Impl {
+                trait_name,
+                target,
+                methods,
+                ..
+            } = statement
+            else {
+                continue;
+            };
+            let receiver_type = target.to_string();
+            for method in methods {
+                trait_method_dispatch
+                    .entry(method.name.clone())
+                    .or_default()
+                    .push(TraitMethodDispatch {
+                        receiver_type: receiver_type.clone(),
+                        function_name: impl_method_function_name(
+                            trait_name,
+                            &receiver_type,
+                            &method.name,
+                        ),
+                    });
+            }
+        }
         let json_decode_schema = JsonDecodeSchema {
             records: module
                 .statements
@@ -973,6 +1062,7 @@ impl Compiler {
         };
         Self {
             enum_names,
+            trait_method_dispatch,
             json_decode_schema,
         }
         .compile_statements(&module.statements)
@@ -1023,8 +1113,10 @@ impl Compiler {
             },
             Stmt::Function {
                 name,
+                is_async,
                 type_params,
                 type_param_constraints: _,
+                type_param_trait_bounds: _,
                 params,
                 return_type,
                 body,
@@ -1032,6 +1124,7 @@ impl Compiler {
                 span,
             } => StatementInstruction::Function {
                 name: name.clone(),
+                is_async: *is_async,
                 type_params: type_params.clone(),
                 params: params.clone(),
                 return_type: return_type.clone(),
@@ -1041,6 +1134,34 @@ impl Compiler {
             Stmt::Record { span, .. } => StatementInstruction::Record { span: *span },
             Stmt::TypeAlias { span, .. } => StatementInstruction::TypeAlias { span: *span },
             Stmt::Enum { span, .. } => StatementInstruction::Enum { span: *span },
+            Stmt::Trait { span, .. } => StatementInstruction::TypeAlias { span: *span },
+            Stmt::Impl {
+                trait_name,
+                target,
+                methods,
+                span,
+            } => {
+                let receiver_type = target.to_string();
+                let functions = methods
+                    .iter()
+                    .map(|method| StatementInstruction::Function {
+                        name: impl_method_function_name(trait_name, &receiver_type, &method.name),
+                        is_async: false,
+                        type_params: Vec::new(),
+                        params: method.params.clone(),
+                        return_type: method.return_type.clone(),
+                        body: self.compile_statements_with_return(
+                            &method.body,
+                            Some(&method.return_type),
+                        ),
+                        span: method.span,
+                    })
+                    .collect::<Vec<_>>();
+                StatementInstruction::Functions {
+                    functions,
+                    span: *span,
+                }
+            }
             Stmt::Return { value, span } => StatementInstruction::Return {
                 value: self.compile_expr_with_context(value, current_return, current_return),
                 span: *span,
@@ -1185,6 +1306,9 @@ impl Compiler {
             ExprKind::Question { value } => ByteExprKind::Question {
                 value: Box::new(self.compile_expr_with_context(value, None, current_return)),
                 return_type: current_return.cloned().unwrap_or(Type::Null),
+            },
+            ExprKind::Await { value } => ByteExprKind::Await {
+                value: Box::new(self.compile_expr_with_context(value, None, current_return)),
             },
             ExprKind::Call { callee, args, .. } => {
                 if let ExprKind::Field { receiver, name, .. } = &callee.kind {
@@ -1541,6 +1665,17 @@ impl Compiler {
         args: &[Expr],
         current_return: Option<&Type>,
     ) -> ByteExprKind {
+        if let Some(dispatch) = self.trait_method_dispatch.get(name) {
+            return ByteExprKind::TraitMethodCall {
+                method_name: name.to_string(),
+                receiver: Box::new(self.compile_expr_with_context(receiver, None, current_return)),
+                args: args
+                    .iter()
+                    .map(|arg| self.compile_expr_with_context(arg, None, current_return))
+                    .collect(),
+                dispatch: dispatch.clone(),
+            };
+        }
         let mut method_args = Vec::with_capacity(args.len() + 1);
         method_args.push(self.compile_expr_with_context(receiver, None, current_return));
         method_args.extend(
@@ -1606,6 +1741,7 @@ impl Compiler {
             }
             StatementInstruction::Function {
                 name,
+                is_async,
                 type_params,
                 params,
                 return_type,
@@ -1614,6 +1750,7 @@ impl Compiler {
             } => {
                 instructions.push(Instruction::Function {
                     name: name.clone(),
+                    is_async: *is_async,
                     type_params: type_params.clone(),
                     params: params.clone(),
                     return_type: return_type.clone(),
@@ -1624,6 +1761,11 @@ impl Compiler {
                     name: name.clone(),
                     span: *span,
                 });
+            }
+            StatementInstruction::Functions { functions, .. } => {
+                for function in functions {
+                    Self::emit_statement(function, instructions);
+                }
             }
             StatementInstruction::Record { .. }
             | StatementInstruction::TypeAlias { .. }
@@ -2123,12 +2265,33 @@ impl Compiler {
                     span: expr.span,
                 });
             }
+            ByteExprKind::Await { value } => {
+                Self::emit_expr(value, instructions);
+                instructions.push(Instruction::Await { span: expr.span });
+            }
             ByteExprKind::Call { callee, args } => {
                 Self::emit_expr(callee, instructions);
                 for arg in args {
                     Self::emit_expr(arg, instructions);
                 }
                 instructions.push(Instruction::Call {
+                    arg_count: args.len(),
+                    span: expr.span,
+                });
+            }
+            ByteExprKind::TraitMethodCall {
+                method_name,
+                receiver,
+                args,
+                dispatch,
+            } => {
+                Self::emit_expr(receiver, instructions);
+                for arg in args {
+                    Self::emit_expr(arg, instructions);
+                }
+                instructions.push(Instruction::TraitMethodCall {
+                    method_name: method_name.clone(),
+                    dispatch: dispatch.clone(),
                     arg_count: args.len(),
                     span: expr.span,
                 });
@@ -2297,6 +2460,7 @@ impl Compiler {
             } => {
                 instructions.push(Instruction::Function {
                     name: String::new(),
+                    is_async: false,
                     type_params: Vec::new(),
                     params: params.clone(),
                     return_type: return_type.clone(),

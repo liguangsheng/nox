@@ -213,6 +213,96 @@ fn parses_option_and_result_type_syntax() {
 }
 
 #[test]
+fn parser_ast_golden_for_trait_impl_and_async_function() {
+    let tokens = lex(r#"
+        export trait Display {
+            fn to_str(self: Self) -> str;
+        }
+
+        record User {
+            name: str,
+        }
+
+        impl Display for User {
+            fn to_str(self: User) -> str {
+                return self.name;
+            }
+        }
+
+        export async fn load<T: Stringify>(value: T) -> result[str, str] {
+            return ok("ready");
+        }
+        "#)
+    .unwrap();
+    let module = parse(tokens).unwrap();
+
+    let Stmt::Trait {
+        name,
+        methods,
+        exported,
+        ..
+    } = &module.statements[0]
+    else {
+        panic!("expected trait declaration");
+    };
+    assert_eq!(name, "Display");
+    assert!(*exported);
+    assert_eq!(methods.len(), 1);
+    assert_eq!(methods[0].name, "to_str");
+    assert_eq!(methods[0].params[0].name, "self");
+    assert_eq!(methods[0].params[0].ty, Type::Generic("Self".to_string()));
+    assert_eq!(methods[0].return_type, Type::Str);
+
+    let Stmt::Impl {
+        trait_name,
+        target,
+        methods,
+        ..
+    } = &module.statements[2]
+    else {
+        panic!("expected impl declaration");
+    };
+    assert_eq!(trait_name, "Display");
+    assert_eq!(*target, Type::Record("User".to_string()));
+    assert_eq!(methods.len(), 1);
+    assert_eq!(methods[0].name, "to_str");
+    assert_eq!(methods[0].params[0].ty, Type::Record("User".to_string()));
+    assert_eq!(methods[0].return_type, Type::Str);
+
+    let Stmt::Function {
+        name,
+        is_async,
+        type_params,
+        type_param_constraints,
+        type_param_trait_bounds,
+        params,
+        return_type,
+        exported,
+        ..
+    } = &module.statements[3]
+    else {
+        panic!("expected async function declaration");
+    };
+    assert_eq!(name, "load");
+    assert!(*is_async);
+    assert!(*exported);
+    assert_eq!(type_params, &vec!["T".to_string()]);
+    assert_eq!(
+        type_param_constraints,
+        &vec![vec![ConstraintMarker::Stringify]]
+    );
+    assert_eq!(type_param_trait_bounds, &vec![Vec::<String>::new()]);
+    assert_eq!(params[0].ty, Type::Generic("T".to_string()));
+    assert_eq!(
+        *return_type,
+        Type::Result {
+            ok: Box::new(Type::Str),
+            err: Box::new(Type::Str),
+        }
+    );
+}
+
+#[test]
 fn rejects_invalid_option_and_result_type_arity() {
     for (source, message) in [
         ("let value: option[] = null;", "expected type name"),
@@ -329,6 +419,7 @@ fn bytecode_verifier_rejects_malformed_nested_function_body() {
     let module = BytecodeModule {
         instructions: vec![bytecode::Instruction::Function {
             name: "bad".to_string(),
+            is_async: false,
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Null,

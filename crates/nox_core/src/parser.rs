@@ -1,7 +1,8 @@
 use crate::{
     lexer::lex, ArrayElement, BinaryOp, BindingTarget, ConstraintMarker, Diagnostic, EnumVariant,
-    Expr, ExprKind, MapEntry, MatchCase, MatchCaseValue, Module, Param, RecordField, Span, Stmt,
-    StringInterpolationPart, Token, TokenKind, TokenStringInterpolationPart, Type, UnaryOp, Value,
+    Expr, ExprKind, ImplMethod, MapEntry, MatchCase, MatchCaseValue, Module, Param, RecordField,
+    Span, Stmt, StringInterpolationPart, Token, TokenKind, TokenStringInterpolationPart,
+    TraitMethod, Type, UnaryOp, Value,
 };
 
 pub(crate) fn parse(tokens: Vec<Token>) -> Result<Module, Diagnostic> {
@@ -26,6 +27,8 @@ struct Parser {
 const MAX_EXPRESSION_DEPTH: usize = 128;
 const MAX_BLOCK_DEPTH: usize = 128;
 const MAX_UNARY_DEPTH: usize = 128;
+
+type FunctionTypeParams = (Vec<String>, Vec<Vec<ConstraintMarker>>, Vec<Vec<String>>);
 
 impl Parser {
     fn new(tokens: Vec<Token>) -> Self {
@@ -78,8 +81,18 @@ impl Parser {
         if self.match_kind(&TokenKind::Enum) {
             return self.enum_declaration(false);
         }
+        if self.match_kind(&TokenKind::Trait) {
+            return self.trait_declaration(false);
+        }
+        if self.match_kind(&TokenKind::Impl) {
+            return self.impl_declaration();
+        }
+        if self.match_kind(&TokenKind::Async) {
+            self.consume(&TokenKind::Fn, "expected 'fn' after 'async'")?;
+            return self.function_declaration(false, true);
+        }
         if self.match_kind(&TokenKind::Fn) {
-            return self.function_declaration(false);
+            return self.function_declaration(false, false);
         }
         if self.match_kind(&TokenKind::Record) {
             return self.record_declaration(false);
@@ -100,8 +113,15 @@ impl Parser {
         if self.match_kind(&TokenKind::Enum) {
             return self.enum_declaration(true);
         }
+        if self.match_kind(&TokenKind::Trait) {
+            return self.trait_declaration(true);
+        }
         if self.match_kind(&TokenKind::Fn) {
-            return self.function_declaration(true);
+            return self.function_declaration(true, false);
+        }
+        if self.match_kind(&TokenKind::Async) {
+            self.consume(&TokenKind::Fn, "expected 'fn' after 'async'")?;
+            return self.function_declaration(true, true);
         }
         if self.match_kind(&TokenKind::Record) {
             return self.record_declaration(true);
@@ -191,6 +211,76 @@ impl Parser {
             name,
             variants,
             exported,
+            span: start.join(end.span),
+        })
+    }
+
+    fn trait_declaration(&mut self, exported: bool) -> Result<Stmt, Diagnostic> {
+        let start = self.previous().span;
+        let (name, _) = self.consume_identifier("expected trait name")?;
+        self.consume(&TokenKind::LeftBrace, "expected '{' before trait body")?;
+        self.type_params
+            .push(std::iter::once("Self".to_string()).collect());
+        let mut methods = Vec::new();
+        if !self.check(&TokenKind::RightBrace) {
+            loop {
+                let method_start = self.consume(&TokenKind::Fn, "expected 'fn' in trait body")?;
+                let (method_name, _) = self.consume_identifier("expected trait method name")?;
+                let (params, return_type, end) = self.function_signature_only()?;
+                methods.push(TraitMethod {
+                    name: method_name,
+                    params,
+                    return_type,
+                    span: method_start.span.join(end),
+                });
+                if self.check(&TokenKind::RightBrace) {
+                    break;
+                }
+            }
+        }
+        self.type_params.pop();
+        let end = self.consume(&TokenKind::RightBrace, "expected '}' after trait body")?;
+        Ok(Stmt::Trait {
+            name,
+            methods,
+            exported,
+            span: start.join(end.span),
+        })
+    }
+
+    fn impl_declaration(&mut self) -> Result<Stmt, Diagnostic> {
+        let start = self.previous().span;
+        let (trait_name, _) = self.consume_identifier("expected trait name after 'impl'")?;
+        self.consume(&TokenKind::For, "expected 'for' after impl trait name")?;
+        let target = self.parse_type()?;
+        self.consume(&TokenKind::LeftBrace, "expected '{' before impl body")?;
+        let self_type = target.clone();
+        self.type_params
+            .push(std::iter::once("Self".to_string()).collect());
+        let mut methods = Vec::new();
+        if !self.check(&TokenKind::RightBrace) {
+            loop {
+                let method_start = self.consume(&TokenKind::Fn, "expected 'fn' in impl body")?;
+                let (method_name, _) = self.consume_identifier("expected impl method name")?;
+                let (params, return_type, body, end) = self.function_signature_and_body()?;
+                methods.push(ImplMethod {
+                    name: method_name,
+                    params: replace_self_params(params, &self_type),
+                    return_type: replace_self_type(return_type, &self_type),
+                    body,
+                    span: method_start.span.join(end),
+                });
+                if self.check(&TokenKind::RightBrace) {
+                    break;
+                }
+            }
+        }
+        self.type_params.pop();
+        let end = self.consume(&TokenKind::RightBrace, "expected '}' after impl body")?;
+        Ok(Stmt::Impl {
+            trait_name,
+            target,
+            methods,
             span: start.join(end.span),
         })
     }
@@ -351,10 +441,11 @@ impl Parser {
         })
     }
 
-    fn function_declaration(&mut self, exported: bool) -> Result<Stmt, Diagnostic> {
+    fn function_declaration(&mut self, exported: bool, is_async: bool) -> Result<Stmt, Diagnostic> {
         let start = self.previous().span;
         let (name, _) = self.consume_identifier("expected function name")?;
-        let (type_params, type_param_constraints) = self.function_type_params()?;
+        let (type_params, type_param_constraints, type_param_trait_bounds) =
+            self.function_type_params()?;
         self.type_params.push(
             type_params
                 .iter()
@@ -366,8 +457,10 @@ impl Parser {
         let (params, return_type, body, end) = result?;
         Ok(Stmt::Function {
             name,
+            is_async,
             type_params,
             type_param_constraints,
+            type_param_trait_bounds,
             params,
             return_type,
             body,
@@ -379,6 +472,19 @@ impl Parser {
     fn function_signature_and_body(
         &mut self,
     ) -> Result<(Vec<Param>, Type, Vec<Stmt>, Span), Diagnostic> {
+        let (params, return_type) = self.function_signature_head()?;
+        self.consume(&TokenKind::LeftBrace, "expected '{' before function body")?;
+        let (body, end) = self.block_statements()?;
+        Ok((params, return_type, body, end))
+    }
+
+    fn function_signature_only(&mut self) -> Result<(Vec<Param>, Type, Span), Diagnostic> {
+        let (params, return_type) = self.function_signature_head()?;
+        let semicolon = self.consume(&TokenKind::Semicolon, "expected ';' after trait method")?;
+        Ok((params, return_type, semicolon.span))
+    }
+
+    fn function_signature_head(&mut self) -> Result<(Vec<Param>, Type), Diagnostic> {
         self.consume(&TokenKind::LeftParen, "expected '(' after function name")?;
         let mut params = Vec::new();
         if !self.check(&TokenKind::RightParen) {
@@ -395,19 +501,16 @@ impl Parser {
         self.consume(&TokenKind::RightParen, "expected ')' after parameters")?;
         self.consume(&TokenKind::Arrow, "expected '->' before return type")?;
         let return_type = self.parse_type()?;
-        self.consume(&TokenKind::LeftBrace, "expected '{' before function body")?;
-        let (body, end) = self.block_statements()?;
-        Ok((params, return_type, body, end))
+        Ok((params, return_type))
     }
 
-    fn function_type_params(
-        &mut self,
-    ) -> Result<(Vec<String>, Vec<Vec<ConstraintMarker>>), Diagnostic> {
+    fn function_type_params(&mut self) -> Result<FunctionTypeParams, Diagnostic> {
         if !self.match_kind(&TokenKind::Less) {
-            return Ok((Vec::new(), Vec::new()));
+            return Ok((Vec::new(), Vec::new(), Vec::new()));
         }
         let mut params = Vec::new();
         let mut constraints: Vec<Vec<ConstraintMarker>> = Vec::new();
+        let mut trait_bounds: Vec<Vec<String>> = Vec::new();
         loop {
             let (name, span) = self.consume_identifier("expected generic type parameter name")?;
             if params.iter().any(|param| param == &name) {
@@ -417,24 +520,17 @@ impl Parser {
                 ));
             }
             let mut param_constraints: Vec<ConstraintMarker> = Vec::new();
+            let mut param_trait_bounds: Vec<String> = Vec::new();
             if self.match_kind(&TokenKind::Colon) {
                 loop {
-                    let (marker_name, marker_span) =
+                    let (marker_name, _marker_span) =
                         self.consume_identifier("expected constraint marker name")?;
-                    let Some(marker) = ConstraintMarker::parse(&marker_name) else {
-                        let known: Vec<&str> =
-                            ConstraintMarker::all().iter().map(|m| m.as_str()).collect();
-                        return Err(Diagnostic::new(
-                            format!(
-                                "unknown constraint marker '{marker_name}'; known markers: {}",
-                                known.join(", ")
-                            ),
-                            marker_span,
-                        )
-                        .with_code("generic.constraint-unknown"));
-                    };
-                    if !param_constraints.contains(&marker) {
-                        param_constraints.push(marker);
+                    if let Some(marker) = ConstraintMarker::parse(&marker_name) {
+                        if !param_constraints.contains(&marker) {
+                            param_constraints.push(marker);
+                        }
+                    } else if !param_trait_bounds.contains(&marker_name) {
+                        param_trait_bounds.push(marker_name);
                     }
                     if !self.match_kind(&TokenKind::Plus) {
                         break;
@@ -443,6 +539,7 @@ impl Parser {
             }
             params.push(name);
             constraints.push(param_constraints);
+            trait_bounds.push(param_trait_bounds);
             if !self.match_kind(&TokenKind::Comma) {
                 break;
             }
@@ -451,7 +548,7 @@ impl Parser {
             &TokenKind::Greater,
             "expected '>' after generic type parameters",
         )?;
-        Ok((params, constraints))
+        Ok((params, constraints, trait_bounds))
     }
 
     fn record_declaration(&mut self, exported: bool) -> Result<Stmt, Diagnostic> {
@@ -567,6 +664,13 @@ impl Parser {
                 ok: Box::new(ok),
                 err: Box::new(err),
             });
+        }
+        if self.check_identifier("task") {
+            self.advance();
+            self.consume(&TokenKind::LeftBracket, "expected '[' after task type")?;
+            let value = self.parse_type()?;
+            self.consume(&TokenKind::RightBracket, "expected ']' after task type")?;
+            return Ok(Type::Task(Box::new(value)));
         }
         let token = self.advance().clone();
         self.type_from_token(token)
@@ -1223,6 +1327,16 @@ impl Parser {
                 ExprKind::Variable(name)
             }
             TokenKind::Fn => return self.lambda_literal(token.span),
+            TokenKind::Await => {
+                let value = self.unary()?;
+                let span = token.span.join(value.span);
+                return Ok(Expr {
+                    kind: ExprKind::Await {
+                        value: Box::new(value),
+                    },
+                    span,
+                });
+            }
             TokenKind::Reserved(name) => {
                 return Err(Diagnostic::new(
                     format!("'{name}' is a reserved keyword and cannot be used as an identifier"),
@@ -1518,6 +1632,9 @@ impl Parser {
                 TokenKind::Let
                     | TokenKind::Type
                     | TokenKind::Enum
+                    | TokenKind::Trait
+                    | TokenKind::Impl
+                    | TokenKind::Async
                     | TokenKind::Fn
                     | TokenKind::Return
                     | TokenKind::If
@@ -1535,12 +1652,56 @@ impl Parser {
     }
 }
 
+fn replace_self_params(params: Vec<Param>, self_type: &Type) -> Vec<Param> {
+    params
+        .into_iter()
+        .map(|param| Param {
+            name: param.name,
+            ty: replace_self_type(param.ty, self_type),
+        })
+        .collect()
+}
+
+fn replace_self_type(ty: Type, self_type: &Type) -> Type {
+    match ty {
+        Type::Generic(name) if name == "Self" => self_type.clone(),
+        Type::Array(element) => Type::Array(Box::new(replace_self_type(*element, self_type))),
+        Type::Tuple(elements) => Type::Tuple(
+            elements
+                .into_iter()
+                .map(|element| replace_self_type(element, self_type))
+                .collect(),
+        ),
+        Type::Map(value) => Type::Map(Box::new(replace_self_type(*value, self_type))),
+        Type::Option(value) => Type::Option(Box::new(replace_self_type(*value, self_type))),
+        Type::Result { ok, err } => Type::Result {
+            ok: Box::new(replace_self_type(*ok, self_type)),
+            err: Box::new(replace_self_type(*err, self_type)),
+        },
+        Type::Function {
+            type_params,
+            params,
+            return_type,
+        } => Type::Function {
+            type_params,
+            params: params
+                .into_iter()
+                .map(|param| replace_self_type(param, self_type))
+                .collect(),
+            return_type: Box::new(replace_self_type(*return_type, self_type)),
+        },
+        other => other,
+    }
+}
+
 fn statement_span(statement: &Stmt) -> Span {
     match statement {
         Stmt::Import { span, .. }
         | Stmt::Let { span, .. }
         | Stmt::TypeAlias { span, .. }
         | Stmt::Enum { span, .. }
+        | Stmt::Trait { span, .. }
+        | Stmt::Impl { span, .. }
         | Stmt::Function { span, .. }
         | Stmt::Record { span, .. }
         | Stmt::Return { span, .. }

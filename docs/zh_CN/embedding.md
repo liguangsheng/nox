@@ -35,7 +35,7 @@ crate-private 类型、模块和测试 helper 都不构成兼容承诺。
 | 稳定宿主扩展 | `HostFunctionBuilder`、`Engine::register_host_function`、`Type`、`Value`、`Value::{string,array,map,some,none,ok,err}` | 用于声明 host function 和传递值；新增类型或改变返回值 ownership 需要同步 Rust/C 文档。 |
 | 稳定错误表面 | `Diagnostic`、`Diagnostic::{new,with_code,with_source,with_stack_frame}`、`Span`、`SourceLocation`、`StackFrame` | `code`、byte span、source location 和 runtime stack frame 是机器契约；`message` 只保证可读，不作为稳定分支条件。 |
 | 稳定会话入口 | `Session`、`Session::engine_mut`、`Session::{set_module_loader,clear_module_cache,set_module_overlay,remove_module_overlay,eval,check,check_diagnostics,hover_type}`、`ModuleGraph::{new,clear_cache,set_overlay,remove_overlay,cached_source}` | 适合编辑器和长期宿主会话；overlay 优先级、缓存失效和 module loader 错误语义必须保持文档一致。 |
-| 稳定运行时入口 | `nox::Runtime`、`MockFilesystem`、`MockNetwork`、`MockHttpResponse`、`RuntimePermissions`、`RuntimePermissions::{none,cli,allow_filesystem_read_under,allow_filesystem_write_under}`、`Runtime::{new,with_permissions,set_args,set_mock_stdin,set_mock_stdout,set_mock_filesystem,set_mock_network,take_stdout,take_stderr,set_instruction_budget,pending_async_task_count,eval,eval_file,check_file,check_file_diagnostics,run_test_file,format_file,hover_type_source_with_base}` | `nox` 默认运行时表面；危险能力默认关闭，新增权限位不得隐式授权。 |
+| 稳定运行时入口 | `nox::Runtime`、`AsyncTaskPoll`、`MockFilesystem`、`MockNetwork`、`MockHttpResponse`、`RuntimePermissions`、`RuntimePermissions::{none,cli,allow_filesystem_read_under,allow_filesystem_write_under}`、`Runtime::{new,with_permissions,set_args,set_mock_stdin,set_mock_stdout,set_mock_filesystem,set_mock_network,take_stdout,take_stderr,set_instruction_budget,pending_async_task_count,spawn_sleep_task,poll_async_task,cancel_async_task,eval,eval_file,check_file,check_file_diagnostics,run_test_file,format_file,hover_type_source_with_base}` | `nox` 默认运行时表面；危险能力默认关闭，新增权限位不得隐式授权。 |
 | 工具/实验表面 | `Engine::{inspect_bytecode,inspect_bytecode_compact,format_source,hover_type,collect_garbage,heap_object_count,set_instruction_budget}` | 当前用于 CLI、调试、编辑器和回归测试；可继续使用，但输出格式、heap 统计细节和 bytecode 文本不作为长期稳定数据模型。 |
 | 内部不承诺 | lexer token、parser AST、bytecode module、verifier、VM、heap layout、crate-private compiler/runtime helper | 不面向宿主；正式文档不得要求下游依赖这些结构。 |
 
@@ -62,9 +62,11 @@ v0.0.x 本地开发阶段仍允许调整公共表面，但本地版本 checkpoin
 
 v0.0.6 到阶段 30.4 为止没有新增 Rust embedding API、C enum、C struct 字段或 exported C
 function。30.1 只把普通文件 import 失败提升为稳定 `module.not-found` 诊断 code；这属于
-`Diagnostic.code` 的兼容扩展。30.2 明确暂缓脚本级和 C ABI async task status API，现有
-`Runtime::pending_async_task_count()` 仍是唯一宿主观察入口。30.3 新增的
-`nox.project-check.v1` 是 CLI schema，不改变 `nox_core`、`Runtime` 或 C ABI。
+`Diagnostic.code` 的兼容扩展。30.2 明确暂缓脚本级和 C ABI async task status API。阶段 69
+新增 `Runtime::spawn_sleep_task`、`Runtime::poll_async_task`、`Runtime::cancel_async_task`
+和 `AsyncTaskPoll`，作为 Rust 宿主驱动同一张 runtime task 表的最小 awaitable runtime
+地基；C ABI 仍不暴露 task handle。30.3 新增的 `nox.project-check.v1` 是 CLI schema，
+不改变 `nox_core` 或 C ABI。
 
 因此 v0.0.6 当前 embedding 边界保持：
 
@@ -73,7 +75,8 @@ function。30.1 只把普通文件 import 失败提升为稳定 `module.not-foun
 - C callback 仍同步执行；`ctx == NULL` 时继续使用 engine userdata。
 - `nox_core_engine_last_error` 仍由 engine 持有，不要求宿主释放；`clear_error` 显式清空。
 - array/map/record/option/result 继续只读 owning handle，仍由对应 free 函数释放。
-- async task id 生命周期不进入 C ABI，completed/cancelled id 继续释放后变成 unknown。
+- async task id 生命周期不进入 C ABI，completed/cancelled id 继续释放后变成 unknown；Rust
+  宿主可用 `Runtime::spawn_sleep_task` / `poll_async_task` / `cancel_async_task` 显式驱动。
 
 ## Rust 宿主函数
 
@@ -587,9 +590,13 @@ let value = runtime.eval_file("examples/hello.nox")?;
 把脚本内 `read_text` / `exists` / `write_text` 限制到指定目录；入口文件读取和 import
 解析仍由 `eval_file` / module loader 控制，不代表脚本自动获得任意文件读写权限。
 异步 task 状态属于单个 `Runtime` 实例；宿主可用 `pending_async_task_count()` 观察
-仍在等待的 task 数，完成和取消都会释放对应 id。v0.0.6 不新增脚本级或 C ABI task status
-查询；需要更细生命周期的宿主应在 Rust 侧维护自己的 task registry，或注册自定义 host
-function。暂缓依据见 [0016 - 暂缓 async task 状态 API](decisions/0016-defer-async-task-status-api.md)。
+仍在等待的 task 数，也可以用 `spawn_sleep_task()` 创建 sleep task、`poll_async_task()`
+非阻塞检查并在 ready 时消费 task、`cancel_async_task()` 取消 pending task。三者复用
+`RuntimePermissions::async_tasks`、`async_task_max_pending` 和 unknown-id diagnostic。
+v0.0.x 不新增脚本级或 C ABI task status 查询；需要更细生命周期的宿主应在 Rust 侧维护自己的
+task registry，或注册自定义 host function。暂缓依据见
+[0016 - 暂缓 async task 状态 API](decisions/0016-defer-async-task-status-api.md)；async/await
+升级路线见 [0030 - 分阶段引入 async/await](decisions/0030-staged-async-await.md)。
 
 ## 取消执行和堆回收
 

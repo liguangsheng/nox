@@ -40,7 +40,8 @@ The implemented v0 surface includes:
 - `std/csv.nox` and `std/tsv.nox` line helpers for parsing and formatting
   delimited text rows.
 - `std/array.nox`, `std/map.nox`, `std/option.nox`, and `std/result.nox`
-  copy-oriented data-structure helpers without mutation or higher-order functions.
+  collection and recoverable-value helpers, including array/map mutation helpers
+  and function-value based array transformations.
 - `std/process.nox` helpers: `argv`, `read_stdin`, `print_err`, and `exit` for
   command-line scripts.
 - `std/path.nox` helpers: `join`, `basename`, `dirname`, `extension`, and
@@ -80,8 +81,51 @@ unknown variants use `enum.variant-not-found`.
 Generic functions support function-level type parameters only. Calls infer type
 parameters from argument types and, where needed, from the expected return type.
 Inference conflicts or missing inference context use `generic.infer-failed`.
-Generic records, generic traits, explicit type arguments, source-level function
-type annotations, higher-order functions, and closures are not part of v0.
+Generic records, generic traits, and explicit type arguments are not part of v0.
+Function values use source-level `fn(T) -> U` type annotations and lambda
+literals such as `fn(x: int) -> int { return x + 1; }`. They can be bound to
+variables, passed as arguments, stored in containers, and used by standard
+library helpers such as `array.map_fn`, `array.filter_fn`, `array.reduce`, and
+`array.for_each`. Closures capture lexical bindings; cross-ABI function handles
+remain outside the stable C ABI.
+
+The experimental static trait MVP supports required methods, `impl Trait for Type`
+for nominal records/enums, and function-level `T: Trait` bounds:
+
+```nox
+trait Display {
+    fn to_str(self: Self) -> str;
+}
+
+record User {
+    name: str,
+}
+
+impl Display for User {
+    fn to_str(self: User) -> str {
+        return self.name;
+    }
+}
+
+fn label<T: Display>(value: T) -> str {
+    return value.to_str();
+}
+```
+
+This is a static MVP only. It does not support an `interface` alias, dynamic
+dispatch, trait objects, blanket impls, associated types, or higher-kinded types.
+Impl methods compile to internal mangled function names and dispatch by receiver
+nominal type, so different types can implement the same trait method name. Source
+top-level functions are still the entry point for ordinary record method sugar,
+so impl methods currently cannot share a name with top-level functions; those
+conflicts use `trait.method-ambiguous`.
+
+The first standard library trait surface is `std/array.nox`'s `Eq` trait plus
+`contains_equal<T: Eq>` and `dedupe_equal<T: Eq>`. Built-in `Eq` impls cover
+`null`, `bool`, `int`, `float`, and `str`; user records/enums can implement the
+same `Eq` after directly importing `std/array.nox`. The older
+`contains_value<T: Equatable>` and `dedupe<T: Equatable>` helpers remain as the
+built-in marker compatibility layer.
 
 Bitwise operators require `int` operands and return `int`; non-`int` operands
 use `type.bitwise-non-int`. Operations use the 64-bit signed `int`
@@ -93,6 +137,12 @@ diagnostics.
 For `result[T, E]?`, the enclosing function must return `result[U, E]`; for `option[T]?`,
 it must return `option[U]`. Mismatches use the stable diagnostic code
 `result.question-mark.mismatch`.
+
+Nox does not expose `throw` / `catch` / `finally` exceptions and currently
+defers Rust-style `try {}` blocks. Recoverable failures should flow as
+`result` or `option` values; permission failures, resource caps, host callback
+panics, parser/typechecker failures, and runtime diagnostics are not catchable
+or wrapped into `err` values.
 
 Record method syntax is checked against ordinary visible functions. The method
 function must be available in the current module or an imported module, and its
@@ -117,7 +167,29 @@ requires a `map[str, T]` source. Element/value types must match the rest of the
 literal. Map merge order follows source order, so later keys overwrite earlier
 keys. Spread type mismatches use `type.spread-mismatch`.
 
-Current non-goals include JavaScript compatibility, Node.js package compatibility, JIT compilation, browser APIs, mutable arrays, slices, closure/function types, and a package registry.
+Arrays and maps support explicit mutation through `arr[i] = value`,
+`map[key] = value`, and the `std/array.nox` / `std/map.nox` mutation helpers.
+Array index-assignment out of range raises `runtime.index-out-of-range`; invalid
+assignment targets use `type.assign-target`. Slice syntax is still not part of
+the language; use `array.slice_copy` or `bytes.slice_copy` helpers where
+appropriate.
+
+Async syntax is available as a staged MVP. `async fn f(...) -> T` calls return
+`task[T]`, and `await expr` is only valid inside another `async fn` where `expr`
+has type `task[T]`. The current runtime executes these tasks on the same thread
+and does not add an IO reactor, implicit permissions, async traits, or top-level
+await. Inside `async fn f() -> result[T, E]` or `async fn f() -> option[T]`,
+postfix `?` propagates through the declared payload result/option exactly as it
+does in synchronous functions; runtime diagnostics are still not converted into
+`err` or `none`. A script whose final value is an unconsumed task raises
+`async.top-level-task`.
+
+Current non-goals include JavaScript compatibility, Node.js package
+compatibility, JIT compilation, browser APIs, macro systems, trait objects,
+dynamic dispatch, exceptions, full async runtime features, and a general package
+registry. Macro-like repetition should currently be handled with functions,
+traits, standard-library helpers, or explicit external code generation before
+Nox compilation.
 
 Integer literals support decimal, `0xff` hexadecimal, `0b1010` binary,
 `0o17` octal, and `_` separators such as `1_000_000`. Malformed integer

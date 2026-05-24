@@ -134,6 +134,12 @@ fn describe() -> result[str, str] {
 
 不兼容的外层返回类型会报稳定诊断 `result.question-mark.mismatch`。
 
+Nox 不提供用户可见的 `throw` / `catch` / `finally` 异常机制，也暂缓 Rust 风格
+`try {}` block。可恢复错误应作为 `result` / `option` 值流动；权限不足、资源上限、
+host callback panic、parser/typechecker 失败和 runtime diagnostic 不会被脚本捕获或包装成
+`err`。错误模型边界见
+[0028 - result / option 错误模型与 try block 暂缓](decisions/0028-result-option-error-model.md)。
+
 数组类型：
 
 ```nox
@@ -141,8 +147,10 @@ let values: [int] = [1, 2, 3];
 let empty: [str] = [];
 ```
 
-数组构造后不可变。当前没有 `push`、元素赋值或切片；v0.0.3 的设计结论见
-[0010 - 暂缓可变数组](decisions/0010-defer-mutable-arrays.md)。
+数组支持显式 mutation：可以通过 `arr[i] = value` 写入，也可以使用
+`std/array.nox` 的 `set`、`append`、`pop` 等 helper。越界写入会报稳定诊断
+`runtime.index-out-of-range`。slice 语法仍不属于语言表面；需要拷贝切片时使用
+`array.slice_copy`。
 
 Map 类型：
 
@@ -191,9 +199,47 @@ fn id<T>(value: T) -> T {
 
 泛型参数只在该函数签名和函数体内有效；调用时由实参类型推导，也可以由 expected
 return type 辅助推导空数组等需要上下文的返回值。推导冲突或无法推导时使用稳定诊断
-`generic.infer-failed`。v0 只支持函数级泛型参数，不支持泛型 record、泛型 trait、显式
-type argument 调用、一等函数值、高阶函数或闭包逃逸。源码中仍暂不支持在变量类型标注里
-书写函数类型；`fn(int) -> int` 只会出现在内部类型展示和 LSP hover 中。
+`generic.infer-failed`。v0 只支持函数级泛型参数，不支持泛型 record、泛型 trait 或显式
+type argument 调用。函数值使用源码级 `fn(T) -> U` 类型标注，lambda 形态为
+`fn(x: int) -> int { return x + 1; }`；函数值可以绑定到变量、作为参数传递、放入容器，
+并供 `array.map_fn`、`array.filter_fn`、`array.reduce`、`array.for_each` 等高阶 helper
+调用。闭包按 lexical env 捕获外部 binding；跨 C ABI 的 function handle 仍不作为稳定表面。
+
+静态 trait MVP 支持声明 required method、为 nominal record/enum 写 `impl Trait for Type`，
+并在函数级泛型中使用 `T: Trait` bound：
+
+```nox
+trait Display {
+    fn to_str(self: Self) -> str;
+}
+
+record User {
+    name: str,
+}
+
+impl Display for User {
+    fn to_str(self: User) -> str {
+        return self.name;
+    }
+}
+
+fn label<T: Display>(value: T) -> str {
+    return value.to_str();
+}
+```
+
+当前 trait 能力是实验性的纯静态 MVP：不支持 `interface` 别名、动态 dispatch、trait object、
+blanket impl、associated type 或 higher-kinded type。impl method 会编译为内部 mangled 函数名，
+并按 receiver nominal type 分派，因此不同类型可以实现同名 trait method。源码级顶层函数仍是
+普通 record method 糖的入口，所以 impl method 暂时不能与顶层函数同名；此类冲突使用
+`trait.method-ambiguous`。
+
+标准库第一批 trait 落点是 `std/array.nox` 的 `Eq` trait，以及
+`contains_equal<T: Eq>` / `dedupe_equal<T: Eq>`。`Eq` 内置实现覆盖
+`null`、`bool`、`int`、`float` 和 `str`；用户 record/enum 可在直接导入
+`std/array.nox` 后实现同一个 `Eq`，再复用这些 helper。旧的
+`contains_value<T: Equatable>` / `dedupe<T: Equatable>` 继续保留，作为内建 marker
+兼容层。
 
 Nox 没有隐式类型转换。声明、运算符、条件、函数参数和返回值都要求类型精确匹配。
 
@@ -573,11 +619,12 @@ task_cancel(id: int) -> null
 `stringify(value: json) -> str`、`kind(value) -> str` 和基础 array/object 访问 helper，覆盖
 number/string/bool/null/array/object 六类基础形态，也是纯计算模块。`std/csv.nox` 与
 `std/tsv.nox` 提供单行分隔文本解析和格式化 helper，不是 streaming parser。
-`std/array.nox`、`std/map.nox`、`std/option.nox` 和 `std/result.nox` 提供面向拷贝的
-数据结构 helper，包括 array copy/sort/slice、map entries/merge/remove/get_or，以及
-option/result 状态判断和 fallback；不引入原地 mutation、闭包或高阶函数。数组和 map value
-类型标注可以包含 tuple、map、option 和 result，例如 `[(str, int)]` 与
-`map[str, option[int]]`。
+`std/array.nox`、`std/map.nox`、`std/option.nox` 和 `std/result.nox` 提供集合和
+可恢复值 helper，包括 array copy/sort/slice、array/map 显式 mutation helper、map
+entries/merge/remove/get_or，以及 option/result 状态判断和 fallback。`std/array.nox`
+还提供基于函数值的 `map_fn`、`filter_fn`、`reduce` 和 `for_each`。数组和 map value
+类型标注可以包含 tuple、map、option、result 和函数类型，例如 `[(str, int)]`、
+`map[str, option[int]]` 与 `[fn(int) -> int]`。
 `std/process.nox` 提供命令行脚本入口 helper：`argv`、`read_stdin`、`print_err` 和 `exit`。
 `std/path.nox` 提供 `join`、`basename`、`dirname`、`extension` 和 `normalize`；`std/fs.nox`
 在既有 filesystem capability 下提供文件分类和目录列表 helper。
@@ -626,24 +673,35 @@ fail-fast 边界，避免制造误导性二次错误。
 
 ## v0.0.4 语言缺口复盘
 
-阶段 27.1 基于 sample project、`std/*` 模块迁移和 embedding/runtime 压力测试复盘后，
-v0.0.4 候选能力按“真实用例是否足以重启设计”排序如下：
+本节保留 v0.0.4 开发期的设计闸门记录。后续阶段已经根据 ADR 0018、0019 和实际实现
+推进了部分候选能力；当前实现状态以本页上文、runtime 文档和 stdlib index 为准。
 
 | 候选能力 | 证据来源 | 当前结论 |
 | --- | --- | --- |
-| `option[T]` / `result[T, E]` | `std/fs.nox` 的 `exists` + `read_text`、`std/env.nox` 的 `list` + `get`、map `contains` + index、async task unknown id、host callback diagnostic。 | 已实现语言内类型、构造和受限 `match` 解包；`std/env.nox try_get`、`std/fs.nox try_read_text` 和 `map_get(map, key)` 已作为可恢复 API 迁移试点。见 [0014 - 重启 option / result 设计但暂不实现](decisions/0014-restart-option-result-design.md)。 |
-| 可变数组 / 数组增长 / slice | sample project 只用固定 record/map/array 字面量；bench 和 tests 也以固定输入为主；stdlib 暂无脚本内逐步收集大型列表的需求。 | 继续暂缓；27.3 已决定 v0.0.4 不实现原地 mutation、copy-on-write helper 或 slice，见 [0015 - 暂缓容器和函数能力扩张](decisions/0015-defer-container-function-expansion.md)。 |
-| 源码级函数类型 / 高阶函数 | sample project 通过命名函数和 namespace import 完成分层；stdlib 通过静态模块成员表达能力；embedding 通过 host function 注册提供回调入口。 | 继续暂缓；27.3 已决定 v0.0.4 不实现 `fn(T) -> U` 类型位置、高阶函数或 C ABI function handle，见 [0015 - 暂缓容器和函数能力扩张](decisions/0015-defer-container-function-expansion.md)。 |
+| `option[T]` / `result[T, E]` | `std/fs.nox` 的 `exists` + `read_text`、`std/env.nox` 的 `list` + `get`、map `contains` + index、async task unknown id、host callback diagnostic。 | 已实现语言内类型、构造、`match` 解包和 `?` 传播；`std/env.nox try_get`、`std/fs.nox try_read_text`、`map_get(map, key)` 等可恢复 API 已进入稳定表面。见 [0014 - 重启 option / result 设计但暂不实现](decisions/0014-restart-option-result-design.md)。 |
+| 可变数组 / 数组增长 / slice | sample project 只用固定 record/map/array 字面量；bench 和 tests 也以固定输入为主；stdlib 暂无脚本内逐步收集大型列表的需求。 | v0.0.4 后续阶段已按 [0018 - 重启可变集合与 slice 设计](decisions/0018-restart-mutable-collections-and-slice.md) 落地数组 / map 显式 mutation helper 与 index assignment；slice 语法仍不进入语言表面，使用 `slice_copy` helper。 |
+| 源码级函数类型 / 高阶函数 | sample project 通过命名函数和 namespace import 完成分层；stdlib 通过静态模块成员表达能力；embedding 通过 host function 注册提供回调入口。 | v0.0.4 后续阶段已按 [0019 - 重启函数值、闭包与高阶函数设计](decisions/0019-restart-function-values-and-closures.md) 落地 `fn(T) -> U` 类型标注、lambda、闭包和受限高阶 stdlib helper；跨 C ABI function handle 仍不进入稳定表面。 |
 | 模块/stdlib 命名边界 | scoreboard 使用 `import "labels.nox" as labels`、`import "scoring.nox" as scoring`；runtime_info 使用 `std/env.nox`、`std/fs.nox`、`std/time.nox`。 | 已由 namespace import、export 和 `std/*` 虚拟模块解决；v0.0.4 不需要为此引入动态 object 或 `std` object。 |
-| 错误处理语法糖 | 当前 runtime 文档推荐 `exists`、`contains`、`env_list()` guard；不可恢复 host 边界仍用 diagnostic。 | 只作为 27.2 的一部分评估。不单独加入异常、隐式 nullable 或 try/catch。 |
+| 错误处理语法糖 | 当前 runtime 文档推荐 `result` / `option` / `?`、可恢复 stdlib helper 和不可恢复 diagnostic 边界。 | 阶段 64 已按 [0028 - result / option 错误模型与 try block 暂缓](decisions/0028-result-option-error-model.md) 确认不引入通用异常，也暂缓 Rust 风格 `try {}` block；阶段 65 改做 helper / 文档 / 测试收敛。 |
 
-因此，27.1 不把任何暂缓项自动推进到实现。27.2 只重启可恢复错误模型设计但暂不实现；
-27.3 继续暂缓可变数组、slice、函数类型、高阶函数和动态 object，直到出现来自项目、
-stdlib 或 embedding 的更强用例。
+阶段 27 的原始结论本身不再代表当前完整能力面；它只解释当时为什么需要先经过 ADR 复审，
+再进入实现。仍保持暂缓的事项包括动态 object、slice 语法、异常、宏、trait object /
+动态 dispatch、完整 async runtime 能力和通用 package registry。
+
+`async fn f(...) -> T` 已进入分阶段 MVP：调用返回 `task[T]`，`await expr` 只能出现在
+另一个 `async fn` 内，且 `expr` 必须是 `task[T]`。当前实现仍是单线程、无 IO reactor、
+无隐式权限、无 async trait、无 top-level await；脚本最终值如果是未消费的 task，会产生
+`async.top-level-task` 诊断。`async fn f() -> result[T, E]` 或
+`async fn f() -> option[T]` 内部的后缀 `?` 按声明的 payload `result` / `option`
+返回类型传播，语义与同步函数一致；runtime diagnostic 仍不会被转换成 `err` 或 `none`。
 
 ## v0 暂不支持
 
-v0 不包含异常、包管理、宏、async 语法、Unicode escape、源码级函数类型标注、
-泛型 record、泛型 trait、C 风格 `for`、数组 mutation、切片或 iterator protocol。
+v0 不包含异常、通用 package registry、宏、完整 async runtime、Unicode escape、泛型 record、
+泛型 trait、trait object、动态 dispatch、C 风格 `for`、切片语法、iterator protocol
+或跨 C ABI 的稳定 function handle。宏系统暂缓依据见
+[0029 - 暂缓宏系统，优先使用函数、trait 与外部 codegen](decisions/0029-defer-macro-system.md)；
+async/await 后续路线见
+[0030 - 分阶段引入 async/await](decisions/0030-staged-async-await.md)。
 
 命令用法见 [cli.md](cli.md)，运行时权限见 [runtime.md](runtime.md)，嵌入 API 见 [embedding.md](embedding.md)。

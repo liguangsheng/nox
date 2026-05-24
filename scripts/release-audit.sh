@@ -156,11 +156,89 @@ else
     fail "PLAN 第 12 项后半: non-scoreboard sample project missing or not wired"
 fi
 
+if [ -x scripts/compatibility-golden.sh ] \
+    && grep -q "compatibility regression: machine-readable golden surfaces" scripts/release-gate.sh \
+    && grep -q "parser AST golden" scripts/release-gate.sh; then
+    pass "PLAN 第 75 项: compatibility golden regression bus wired"
+else
+    fail "PLAN 第 75 项: compatibility golden regression bus missing"
+fi
+
+if [ -x scripts/release-candidate-readiness.sh ] \
+    && grep -q "release candidate readiness guard" scripts/release-gate.sh; then
+    pass "PLAN 第 76 项: release candidate readiness guard wired"
+else
+    fail "PLAN 第 76 项: release candidate readiness guard missing"
+fi
+
+if [ -x scripts/release-cutover-check.sh ] \
+    && [ -x scripts/release-cutover-status.sh ] \
+    && [ -x scripts/release-asset-manifest.sh ] \
+    && [ -x scripts/release-toolchain-status.sh ] \
+    && [ -x scripts/release-upload-plan.sh ] \
+    && [ -x scripts/release-notes.sh ] \
+    && [ -x scripts/release-command-plan.sh ] \
+    && [ -x scripts/release-evidence-report.sh ] \
+    && [ -x scripts/release-prep-dry-run.sh ] \
+    && grep -q "NOX_RELEASE_TAG" scripts/build-release-assets.sh \
+    && grep -q "NOX_RELEASE_ASSET_DIR" scripts/build-release-assets.sh \
+    && grep -q "NOX_RELEASE_CI_EVIDENCE" scripts/release-cutover-check.sh \
+    && grep -q "release asset builder self-test" scripts/release-gate.sh \
+    && grep -q "release asset manifest self-test" scripts/release-gate.sh \
+    && grep -q "release toolchain status self-test" scripts/release-gate.sh \
+    && grep -q "x86_64-unknown-linux-musl" scripts/release-asset-manifest.sh \
+    && grep -q -- "--self-test" scripts/release-cutover-check.sh \
+    && grep -q "release cutover check self-test" scripts/release-gate.sh \
+    && grep -q "release cutover status self-test" scripts/release-gate.sh \
+    && grep -q "release cutover status JSON smoke" scripts/release-gate.sh \
+    && grep -q "release upload plan self-test" scripts/release-gate.sh \
+    && grep -q "release notes extraction self-test" scripts/release-gate.sh \
+    && grep -q "release command plan self-test" scripts/release-gate.sh \
+    && grep -q "release evidence report self-test" scripts/release-gate.sh \
+    && grep -q "release prep dry-run self-test" scripts/release-gate.sh \
+    && grep -q "gh release upload" scripts/release-upload-plan.sh \
+    && grep -q "release-asset-manifest.sh" scripts/release-upload-plan.sh \
+    && grep -q "sha256sum -c" scripts/release-upload-plan.sh \
+    && grep -q "CHANGELOG section" scripts/release-notes.sh \
+    && grep -q "release-cutover-check.sh" scripts/release-command-plan.sh \
+    && grep -q "release-audit.sh" scripts/release-command-plan.sh \
+    && grep -q "CLI_ONLY_TARGET_TRIPLES" scripts/release-command-plan.sh \
+    && grep -q "Nox Phase 77 Release Evidence" scripts/release-evidence-report.sh \
+    && grep -q "release-cutover-status.sh --json" scripts/release-evidence-report.sh \
+    && grep -q "release-command-plan.sh" scripts/release-evidence-report.sh \
+    && grep -q "release-toolchain-status.sh --json" scripts/release-evidence-report.sh \
+    && grep -q "release-toolchain-status.sh" scripts/release-command-plan.sh \
+    && grep -q "nox.release-toolchain-status.v1" scripts/release-toolchain-status.sh \
+    && grep -q "release-candidate-readiness.sh" scripts/release-prep-dry-run.sh \
+    && grep -q "release-notes.sh" scripts/release-prep-dry-run.sh \
+    && grep -q "nox.release-cutover-status.v1" scripts/release-cutover-status.sh \
+    && grep -q "ready for strict cutover check" scripts/release-cutover-status.sh \
+    && grep -q "release-asset-manifest.sh" scripts/release-cutover-check.sh \
+    && grep -q "release-asset-manifest.sh" scripts/release-cutover-status.sh \
+    && grep -q 'base\.sha256' scripts/release-cutover-check.sh \
+    && ! grep -q 'tar\.gz\.sha256' scripts/release-cutover-check.sh; then
+    pass "PLAN 第 77 项: release cutover check wired"
+else
+    fail "PLAN 第 77 项: release cutover check missing"
+fi
+
+if [ -x scripts/prepare-release-version.sh ] \
+    && grep -q "prepare-release-version.sh 0.0.5" docs/zh_CN/release-checklist.md \
+    && grep -q "prepare-release-version.sh 0.0.5" docs/en/release-checklist.md \
+    && grep -q -- "--self-test" scripts/prepare-release-version.sh \
+    && grep -q -- "--check-only" scripts/prepare-release-version.sh \
+    && grep -q "release-prep version helper self-test" scripts/release-gate.sh \
+    && grep -q "release-prep version helper check-only" scripts/release-gate.sh; then
+    pass "PLAN 第 77 项: release-prep version helper wired"
+else
+    fail "PLAN 第 77 项: release-prep version helper missing"
+fi
+
 # PLAN 第 13 项: 暂缓项守护. GOAL.md 由 .gitignore 排除, 不能直接 diff; 守护落在公开 API/CLI 关键词
 # grep 上. 任何暂缓项 (mutable array, slice type, closure, higher-order, watch mode, incremental
-# typecheck, tracing gc, package registry, lockfile) 在公开 surface 出现, 必须先修 GOAL.md 与
+# typecheck, tracing gc, package registry) 在公开 surface 出现, 必须先修 GOAL.md 与
 # CHANGELOG breaking-changes 再放行.
-DEFERRED_RE='mutable array|slice type|closure|higher-order|watch mode|incremental typecheck|tracing gc|package registry|lockfile'
+DEFERRED_RE='mutable array|slice type|closure|higher-order|watch mode|incremental typecheck|tracing gc|package registry'
 DEFERRED_HITS=/tmp/nox-deferred-hits.$$
 if rg -i "$DEFERRED_RE" crates/nox/src crates/nox_core/src 2>/dev/null > "$DEFERRED_HITS"; then
     if [ -s "$DEFERRED_HITS" ]; then
@@ -175,12 +253,14 @@ else
 fi
 
 if [ "$failures" -eq 0 ]; then
+    pass "PLAN 第 77 项: production release cutover evidence satisfied"
     note "production release audit passed for $TAG"
     note "GOAL implementation: ACHIEVED on $TAG (PLAN 完成定义 13 项 + 持续门槛全部成立)"
     exit 0
 fi
 
 note "production release audit failed with $failures blocker(s)"
+note "PLAN 第 77 项: production release cutover evidence remains pending"
 note "GOAL implementation: NOT ACHIEVED until all blockers are cleared"
 if [ "$EXPECT_BLOCKED" = "1" ]; then
     note "blocked checkpoint mode accepted current blockers"

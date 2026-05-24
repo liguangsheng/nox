@@ -2307,6 +2307,179 @@ fn generic_function_reports_conflicting_inference() {
 }
 
 #[test]
+fn trait_impl_method_call_runs_static_dispatch_mvp() {
+    let mut engine = Engine::new();
+    let value = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+            }
+
+            record User {
+                name: str,
+            }
+
+            impl Display for User {
+                fn to_str(self: User) -> str {
+                    return self.name;
+                }
+            }
+
+            let user: User = User { name: "nox" };
+            user.to_str();
+            "#,
+        )
+        .unwrap();
+    assert_eq!(value, Value::string("nox"));
+}
+
+#[test]
+fn trait_bound_rejects_unimplemented_type() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+            }
+
+            record User {
+                name: str,
+            }
+
+            fn label<T: Display>(value: T) -> str {
+                return value.to_str();
+            }
+
+            let user: User = User { name: "nox" };
+            label(user);
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "trait.bound-unsatisfied");
+}
+
+#[test]
+fn trait_impl_requires_all_methods() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+            }
+
+            record User {
+                name: str,
+            }
+
+            impl Display for User {
+            }
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "trait.impl-incomplete");
+}
+
+#[test]
+fn trait_impl_rejects_signature_mismatch() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+            }
+
+            record User {
+                name: str,
+            }
+
+            impl Display for User {
+                fn to_str(self: User) -> int {
+                    return 1;
+                }
+            }
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "trait.method-signature-mismatch");
+}
+
+#[test]
+fn trait_impl_method_dispatch_allows_same_method_name_for_different_types() {
+    let mut engine = Engine::new();
+    let value = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+            }
+
+            record User {
+                name: str,
+            }
+
+            record Team {
+                name: str,
+            }
+
+            impl Display for User {
+                fn to_str(self: User) -> str {
+                    return self.name;
+                }
+            }
+
+            impl Display for Team {
+                fn to_str(self: Team) -> str {
+                    return self.name;
+                }
+            }
+
+            fn label<T: Display>(value: T) -> str {
+                return value.to_str();
+            }
+
+            let user: User = User { name: "nox" };
+            let team: Team = Team { name: "core" };
+            label(user) + ":" + label(team);
+            "#,
+        )
+        .unwrap();
+    assert_eq!(value, Value::string("nox:core"));
+}
+
+#[test]
+fn trait_impl_rejects_top_level_function_collision() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+            }
+
+            record User {
+                name: str,
+            }
+
+            fn to_str(value: str) -> str {
+                return value;
+            }
+
+            impl Display for User {
+                fn to_str(self: User) -> str {
+                    return self.name;
+                }
+            }
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "trait.method-ambiguous");
+}
+
+#[test]
 fn runtime_stack_trace_records_script_call_frames() {
     let mut engine = Engine::new();
     let err = engine
@@ -2723,7 +2896,7 @@ fn constraint_unsatisfied_with_function_value_reports_stable_code() {
 }
 
 #[test]
-fn constraint_unknown_marker_is_rejected_with_stable_code() {
+fn unknown_trait_bound_is_rejected_with_stable_code() {
     let mut engine = Engine::new();
     let err = engine
         .eval(
@@ -2735,8 +2908,8 @@ fn constraint_unknown_marker_is_rejected_with_stable_code() {
             "#,
         )
         .unwrap_err();
-    assert_eq!(err.code, "generic.constraint-unknown");
-    assert!(err.message.contains("unknown constraint marker"));
+    assert_eq!(err.code, "trait.not-found");
+    assert!(err.message.contains("trait 'Foo' is not defined"));
 }
 
 #[test]
@@ -3363,4 +3536,185 @@ fn allows_recursion_within_max_call_depth_limit() {
         )
         .unwrap();
     assert_eq!(value, Value::Int(0));
+}
+
+#[test]
+fn async_fn_await_runs_ready_task_mvp() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            async fn compute(value: int) -> int {
+                return value + 1;
+            }
+
+            async fn main() -> int {
+                let task: task[int] = compute(41);
+                return await task;
+            }
+
+            main();
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "async.top-level-task");
+}
+
+#[test]
+fn async_question_mark_propagates_result_and_option_payloads() {
+    let mut engine = Engine::new();
+    let value = engine
+        .eval(
+            r#"
+            fn fallible(flag: bool) -> result[int, str] {
+                if (flag) {
+                    return ok(40);
+                }
+                return err("missing");
+            }
+
+            fn maybe(flag: bool) -> option[int] {
+                if (flag) {
+                    return some(40);
+                }
+                return none;
+            }
+
+            async fn result_total(flag: bool) -> result[int, str] {
+                let count: int = fallible(flag)?;
+                return ok(count + 2);
+            }
+
+            async fn option_total(flag: bool) -> option[int] {
+                let count: int = maybe(flag)?;
+                return some(count + 2);
+            }
+
+            async fn verify() -> int {
+                let result_ok: result[int, str] = await result_total(true);
+                match (result_ok) {
+                    ok(value) => {
+                        if (value != 42) {
+                            return 1 / 0;
+                        }
+                    }
+                    err(message) => {
+                        return 1 / 0;
+                    }
+                }
+
+                let result_err: result[int, str] = await result_total(false);
+                match (result_err) {
+                    ok(value) => {
+                        return 1 / 0;
+                    }
+                    err(message) => {
+                        if (message != "missing") {
+                            return 1 / 0;
+                        }
+                    }
+                }
+
+                let option_some: option[int] = await option_total(true);
+                match (option_some) {
+                    some(value) => {
+                        if (value != 42) {
+                            return 1 / 0;
+                        }
+                    }
+                    none => {
+                        return 1 / 0;
+                    }
+                }
+
+                let option_none: option[int] = await option_total(false);
+                match (option_none) {
+                    some(value) => {
+                        return 1 / 0;
+                    }
+                    none => {}
+                }
+
+                return 99;
+            }
+
+            let task: task[int] = verify();
+            7;
+            "#,
+        )
+        .unwrap();
+    assert_eq!(value, Value::Int(7));
+}
+
+#[test]
+fn async_question_mark_rejects_result_error_type_mismatch() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            fn fail() -> result[int, str] {
+                return err("missing");
+            }
+
+            async fn bad() -> result[int, int] {
+                let value: int = fail()?;
+                return ok(value);
+            }
+
+            let task: task[result[int, int]] = bad();
+            0;
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "result.question-mark.mismatch");
+    assert!(err.message.contains("'?' error type mismatch"));
+}
+
+#[test]
+fn await_outside_async_is_rejected_with_stable_code() {
+    let mut engine = Engine::new();
+    let err = engine
+        .check(
+            r#"
+            async fn compute() -> int {
+                return 1;
+            }
+
+            await compute();
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "async.await-outside-async");
+}
+
+#[test]
+fn await_non_task_is_rejected_with_stable_code() {
+    let mut engine = Engine::new();
+    let err = engine
+        .check(
+            r#"
+            async fn compute() -> int {
+                return await 1;
+            }
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "async.await-non-task");
+}
+
+#[test]
+fn top_level_async_task_is_rejected_with_stable_code() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            async fn compute() -> int {
+                return 1;
+            }
+
+            compute();
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "async.top-level-task");
 }

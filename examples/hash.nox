@@ -1,0 +1,15 @@
+import "std/hash.nox" as hash;
+
+let text_digest: str = hash.sha256_text("abc");
+let byte_digest: str = hash.sha256_hex([97, 98, 99]);
+let hmac_digest: str = hash.hmac_sha256_text("key", "The quick brown fox jumps over the lazy dog");
+
+if (
+    text_digest == byte_digest &&
+    text_digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
+    hmac_digest == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8"
+) {
+    "hash-ok";
+} else {
+    "hash-bad";
+}

@@ -1,0 +1,26 @@
+import "std/json.nox" as json;
+import "std/jsonl.nox" as jsonl;
+
+let source: str = "{\"name\":\"nox\",\"count\":1}\n{\"name\":\"runtime\",\"count\":2}";
+let parsed: result[[json], str] = jsonl.parse_lines(source);
+
+match (parsed) {
+    ok(values) => {
+        let first_name: result[json, str] = json.object_get(values[0], "name");
+        match (first_name) {
+            ok(name) => {
+                if (len(values) == 2 && json.stringify(name) == "\"nox\"") {
+                    jsonl.format_lines(values);
+                } else {
+                    "jsonl-bad";
+                }
+            }
+            err(message) => {
+                message;
+            }
+        }
+    }
+    err(message) => {
+        message;
+    }
+}

@@ -111,6 +111,11 @@ impl GcHeap {
                 track_rc(&mut self.results, result);
                 self.track_value_inner(result.payload());
             }
+            Value::Task(task) => {
+                if let Some(payload) = task.ready_payload() {
+                    self.track_value_inner(payload);
+                }
+            }
             Value::Enum(value) => {
                 track_rc(&mut self.enums, value);
                 if let Some(payload) = value.payload() {

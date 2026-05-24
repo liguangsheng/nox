@@ -29,9 +29,13 @@ smoke 和本地 Markdown 链接检查。本地命令保持与 CI 一致，避免
 scripts/release-gate.sh
 ```
 
-该脚本串行执行 Cargo gate、CLI version/run/check/test/fmt smoke、scoreboard project smoke、embedding regression、
-robustness smoke、benchmark smoke、Markdown 链接检查和 `git diff --check HEAD`。它只做
-本地验证，不 push、不打 tag、不发布外部资产。
+该脚本串行执行 Cargo gate、CLI version/run/check/test/fmt smoke、scoreboard project smoke、
+compatibility golden、embedding regression、robustness smoke、benchmark smoke、Markdown
+链接检查和 `git diff --check HEAD`。compatibility golden 位于
+`scripts/compatibility-golden.sh`，固定 parser/formatter 表面、CLI diagnostic JSON、LSP
+diagnostic JSON、`nox doc` 输出、project lockfile JSON 和 host-metadata API JSON；release
+gate 还显式跑 parser AST golden、C ABI enum 数值和 async Rust API task 行为的 focused tests。
+它只做本地验证，不 push、不打 tag、不发布外部资产。
 
 验证本地分发包和安装目录时，运行：
 

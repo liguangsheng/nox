@@ -261,6 +261,10 @@ pub(crate) enum TokenKind {
     Const,
     Type,
     Enum,
+    Trait,
+    Impl,
+    Async,
+    Await,
     Fn,
     Return,
     If,
@@ -429,6 +433,7 @@ fn statement_is_exported(statement: &Stmt) -> bool {
         Stmt::Let { exported, .. }
         | Stmt::TypeAlias { exported, .. }
         | Stmt::Enum { exported, .. }
+        | Stmt::Trait { exported, .. }
         | Stmt::Function { exported, .. }
         | Stmt::Record { exported, .. } => *exported,
         _ => false,
@@ -438,7 +443,9 @@ fn statement_is_exported(statement: &Stmt) -> bool {
 fn top_level_declaration_name(statement: &Stmt) -> Option<&str> {
     match statement {
         Stmt::Let { target, .. } => target.single_name(),
-        Stmt::TypeAlias { name, .. } | Stmt::Enum { name, .. } => Some(name),
+        Stmt::TypeAlias { name, .. } | Stmt::Enum { name, .. } | Stmt::Trait { name, .. } => {
+            Some(name)
+        }
         Stmt::Function { name, .. } | Stmt::Record { name, .. } => Some(name),
         _ => None,
     }
@@ -449,6 +456,8 @@ fn top_level_declaration_span(statement: &Stmt) -> Span {
         Stmt::Let { span, .. }
         | Stmt::TypeAlias { span, .. }
         | Stmt::Enum { span, .. }
+        | Stmt::Trait { span, .. }
+        | Stmt::Impl { span, .. }
         | Stmt::Function { span, .. }
         | Stmt::Record { span, .. } => *span,
         _ => Span { start: 0, end: 0 },
@@ -551,8 +560,10 @@ impl NameRewriter {
             }
             Stmt::Function {
                 name,
+                is_async,
                 type_params,
                 type_param_constraints,
+                type_param_trait_bounds,
                 params,
                 return_type,
                 body,
@@ -584,8 +595,10 @@ impl NameRewriter {
                 self.pop_scope();
                 Stmt::Function {
                     name,
+                    is_async,
                     type_params,
                     type_param_constraints,
+                    type_param_trait_bounds: self.rewrite_trait_bounds(type_param_trait_bounds),
                     params,
                     return_type,
                     body,
@@ -593,6 +606,67 @@ impl NameRewriter {
                     span,
                 }
             }
+            Stmt::Trait {
+                name,
+                methods,
+                exported,
+                span,
+            } => {
+                let name = if top_level {
+                    self.rename_declaration(name)
+                } else {
+                    name
+                };
+                let methods = methods
+                    .into_iter()
+                    .map(|method| TraitMethod {
+                        name: method.name,
+                        params: method
+                            .params
+                            .into_iter()
+                            .map(|param| Param {
+                                name: param.name,
+                                ty: self.rewrite_type(param.ty),
+                            })
+                            .collect(),
+                        return_type: self.rewrite_type(method.return_type),
+                        span: method.span,
+                    })
+                    .collect();
+                Stmt::Trait {
+                    name,
+                    methods,
+                    exported,
+                    span,
+                }
+            }
+            Stmt::Impl {
+                trait_name,
+                target,
+                methods,
+                span,
+            } => Stmt::Impl {
+                trait_name: self.rename_type_name(trait_name),
+                target: self.rewrite_type(target),
+                methods: methods
+                    .into_iter()
+                    .map(|method| ImplMethod {
+                        name: method.name,
+                        params: method
+                            .params
+                            .into_iter()
+                            .map(|param| Param {
+                                name: param.name,
+                                ty: self.rewrite_type(param.ty),
+                            })
+                            .collect(),
+                        return_type: self.rewrite_type(method.return_type),
+                        body: self.rewrite_block(method.body),
+                        span: method.span,
+                    })
+                    .collect(),
+                span,
+            },
             Stmt::Record {
                 name,
                 fields,
@@ -792,6 +866,9 @@ impl NameRewriter {
             ExprKind::Question { value } => ExprKind::Question {
                 value: Box::new(self.rewrite_expr(*value)),
             },
+            ExprKind::Await { value } => ExprKind::Await {
+                value: Box::new(self.rewrite_expr(*value)),
+            },
             ExprKind::Variable(name) => ExprKind::Variable(self.rename_reference(name)),
             ExprKind::Assign { name, value } => ExprKind::Assign {
                 name: self.rename_reference(name),
@@ -912,6 +989,7 @@ impl NameRewriter {
                 ok: Box::new(self.rewrite_type(*ok)),
                 err: Box::new(self.rewrite_type(*err)),
             },
+            Type::Task(value) => Type::Task(Box::new(self.rewrite_type(*value))),
             Type::Record(name) => Type::Record(self.rename_type_name(name)),
             Type::Enum(name) => Type::Enum(self.rename_type_name(name)),
             Type::Function {
@@ -973,6 +1051,18 @@ impl NameRewriter {
 
     fn rename_type_name(&self, name: String) -> String {
         self.renames.get(&name).cloned().unwrap_or(name)
+    }
+
+    fn rewrite_trait_bounds(&self, bounds: Vec<Vec<String>>) -> Vec<Vec<String>> {
+        bounds
+            .into_iter()
+            .map(|names| {
+                names
+                    .into_iter()
+                    .map(|name| self.rename_type_name(name))
+                    .collect()
+            })
+            .collect()
     }
 
     fn push_scope(&mut self) {
@@ -1042,11 +1132,39 @@ impl NamespaceRewriter {
                     span,
                 }
             }
-            Stmt::TypeAlias { .. } | Stmt::Enum { .. } => statement,
+            Stmt::TypeAlias { .. } | Stmt::Enum { .. } | Stmt::Trait { .. } => statement,
+            Stmt::Impl {
+                trait_name,
+                target,
+                methods,
+                span,
+            } => Stmt::Impl {
+                trait_name,
+                target,
+                methods: methods
+                    .into_iter()
+                    .map(|method| {
+                        self.push_scope();
+                        for param in &method.params {
+                            self.define_local(param.name.clone());
+                        }
+                        let body = method
+                            .body
+                            .into_iter()
+                            .map(|statement| self.rewrite_statement(statement, false))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        self.pop_scope();
+                        Ok(ImplMethod { body, ..method })
+                    })
+                    .collect::<Result<Vec<_>, Diagnostic>>()?,
+                span,
+            },
             Stmt::Function {
                 name,
+                is_async,
                 type_params,
                 type_param_constraints,
+                type_param_trait_bounds,
                 params,
                 return_type,
                 body,
@@ -1067,8 +1185,10 @@ impl NamespaceRewriter {
                 self.pop_scope();
                 Stmt::Function {
                     name,
+                    is_async,
                     type_params,
                     type_param_constraints,
+                    type_param_trait_bounds,
                     params,
                     return_type,
                     body,
@@ -1257,6 +1377,9 @@ impl NamespaceRewriter {
                     .collect::<Result<Vec<_>, Diagnostic>>()?,
             ),
             ExprKind::Question { value } => ExprKind::Question {
+                value: Box::new(self.rewrite_expr(*value)?),
+            },
+            ExprKind::Await { value } => ExprKind::Await {
                 value: Box::new(self.rewrite_expr(*value)?),
             },
             ExprKind::Variable(name) => ExprKind::Variable(name),
@@ -1448,10 +1571,24 @@ enum Stmt {
         exported: bool,
         span: Span,
     },
+    Trait {
+        name: String,
+        methods: Vec<TraitMethod>,
+        exported: bool,
+        span: Span,
+    },
+    Impl {
+        trait_name: String,
+        target: Type,
+        methods: Vec<ImplMethod>,
+        span: Span,
+    },
     Function {
         name: String,
+        is_async: bool,
         type_params: Vec<String>,
         type_param_constraints: Vec<Vec<ConstraintMarker>>,
+        type_param_trait_bounds: Vec<Vec<String>>,
         params: Vec<Param>,
         return_type: Type,
         body: Vec<Stmt>,
@@ -1617,6 +1754,23 @@ struct Param {
     ty: Type,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TraitMethod {
+    name: String,
+    params: Vec<Param>,
+    return_type: Type,
+    span: Span,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct ImplMethod {
+    name: String,
+    params: Vec<Param>,
+    return_type: Type,
+    body: Vec<Stmt>,
+    span: Span,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConstraintMarker {
     Equatable,
@@ -1662,7 +1816,9 @@ fn type_implements_marker(ty: &Type, marker: ConstraintMarker) -> bool {
             marker,
             ConstraintMarker::Stringify | ConstraintMarker::Equatable
         ),
-        Type::Array(element) | Type::Option(element) => type_implements_marker(element, marker),
+        Type::Array(element) | Type::Option(element) | Type::Task(element) => {
+            type_implements_marker(element, marker)
+        }
         Type::Map(value) => type_implements_marker(value, marker),
         Type::Tuple(elements) => elements
             .iter()
@@ -1720,6 +1876,7 @@ pub enum Type {
         params: Vec<Type>,
         return_type: Box<Type>,
     },
+    Task(Box<Type>),
     Generic(String),
 }
 
@@ -1746,6 +1903,7 @@ impl fmt::Display for Type {
             Self::Map(value) => write!(f, "map[str, {value}]"),
             Self::Option(value) => write!(f, "option[{value}]"),
             Self::Result { ok, err } => write!(f, "result[{ok}, {err}]"),
+            Self::Task(value) => write!(f, "task[{value}]"),
             Self::Record(name) => write!(f, "{name}"),
             Self::Enum(name) => write!(f, "{name}"),
             Self::Generic(name) => write!(f, "{name}"),
@@ -1795,6 +1953,9 @@ enum ExprKind {
     Literal(Value),
     StringInterpolation(Vec<StringInterpolationPart>),
     Question {
+        value: Box<Expr>,
+    },
+    Await {
         value: Box<Expr>,
     },
     Variable(String),
@@ -1892,6 +2053,7 @@ pub enum Value {
     Map(Rc<Map>),
     Option(Rc<OptionValue>),
     Result(Rc<ResultValue>),
+    Task(Rc<TaskValue>),
     Enum(Rc<EnumValue>),
     Record(Rc<Record>),
     Function(Rc<Function>),
@@ -1932,6 +2094,11 @@ impl fmt::Debug for Value {
                 .field("err_type", &result.err_type)
                 .field("variant", &result.variant)
                 .finish(),
+            Self::Task(task) => f
+                .debug_struct("Task")
+                .field("payload_type", &task.payload_type)
+                .field("value", &task)
+                .finish(),
             Self::Enum(value) => f
                 .debug_struct("Enum")
                 .field("name", &value.name)
@@ -1965,6 +2132,7 @@ impl PartialEq for Value {
             (Self::Map(left), Self::Map(right)) => Rc::ptr_eq(left, right),
             (Self::Option(left), Self::Option(right)) => Rc::ptr_eq(left, right),
             (Self::Result(left), Self::Result(right)) => Rc::ptr_eq(left, right),
+            (Self::Task(left), Self::Task(right)) => Rc::ptr_eq(left, right),
             (Self::Enum(left), Self::Enum(right)) => Rc::ptr_eq(left, right),
             (Self::Record(left), Self::Record(right)) => Rc::ptr_eq(left, right),
             (Self::Function(left), Self::Function(right)) => Rc::ptr_eq(left, right),
@@ -2010,6 +2178,17 @@ impl Value {
         Self::Result(Rc::new(ResultValue::err(ok_type, err_type, payload)))
     }
 
+    pub fn ready_task(payload_type: Type, payload: Value) -> Self {
+        Self::Task(Rc::new(TaskValue::ready(payload_type, payload)))
+    }
+
+    pub fn host_task(
+        payload_type: Type,
+        awaiter: impl Fn(Span) -> Result<Value, Diagnostic> + 'static,
+    ) -> Self {
+        Self::Task(Rc::new(TaskValue::host(payload_type, awaiter)))
+    }
+
     pub fn enum_variant(
         name: impl Into<String>,
         variant: impl Into<String>,
@@ -2031,6 +2210,7 @@ impl Value {
             Self::Map(_) => "map",
             Self::Option(_) => "option",
             Self::Result(_) => "result",
+            Self::Task(_) => "task",
             Self::Enum(_) => "enum",
             Self::Record(_) => "record",
             Self::Function(_) => "function",
@@ -2090,6 +2270,7 @@ impl fmt::Display for Value {
                 ResultVariant::Ok(payload) => write!(f, "ok({payload})"),
                 ResultVariant::Err(payload) => write!(f, "err({payload})"),
             },
+            Self::Task(task) => write!(f, "<task {}>", task.payload_type),
             Self::Enum(value) => {
                 write!(f, "{}.{}", value.name, value.variant)?;
                 if let Some(payload) = &value.payload {
@@ -2230,6 +2411,67 @@ impl ResultValue {
 pub(crate) enum ResultVariant {
     Ok(Value),
     Err(Value),
+}
+
+pub struct TaskValue {
+    pub(crate) payload_type: Type,
+    pub(crate) kind: TaskValueKind,
+}
+
+#[derive(Clone)]
+pub(crate) enum TaskValueKind {
+    Ready(Value),
+    Host(Rc<TaskAwaiter>),
+}
+
+impl TaskValue {
+    pub(crate) fn ready(payload_type: Type, payload: Value) -> Self {
+        Self {
+            payload_type,
+            kind: TaskValueKind::Ready(payload),
+        }
+    }
+
+    pub(crate) fn host(
+        payload_type: Type,
+        awaiter: impl Fn(Span) -> Result<Value, Diagnostic> + 'static,
+    ) -> Self {
+        Self {
+            payload_type,
+            kind: TaskValueKind::Host(Rc::new(awaiter)),
+        }
+    }
+
+    pub fn payload_type(&self) -> &Type {
+        &self.payload_type
+    }
+
+    pub fn await_value(&self, span: Span) -> Result<Value, Diagnostic> {
+        match &self.kind {
+            TaskValueKind::Ready(value) => Ok(value.clone()),
+            TaskValueKind::Host(awaiter) => awaiter(span),
+        }
+    }
+
+    pub(crate) fn ready_payload(&self) -> Option<&Value> {
+        match &self.kind {
+            TaskValueKind::Ready(value) => Some(value),
+            TaskValueKind::Host(_) => None,
+        }
+    }
+}
+
+impl fmt::Debug for TaskValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let state = match &self.kind {
+            TaskValueKind::Ready(_) => "ready",
+            TaskValueKind::Host(_) => "host",
+        };
+        f.debug_struct("Task")
+            .field("payload_type", &self.payload_type)
+            .field("state", &state)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2469,6 +2711,7 @@ impl Record {
 
 pub struct Function {
     name: String,
+    is_async: bool,
     type_params: Vec<String>,
     params: Vec<Param>,
     return_type: Type,
@@ -2487,6 +2730,7 @@ enum FunctionKind {
 
 type HostCallback = dyn Fn(&[Value]) -> Result<Value, Diagnostic>;
 type ModuleLoader = dyn Fn(&str) -> Result<String, Diagnostic>;
+type TaskAwaiter = dyn Fn(Span) -> Result<Value, Diagnostic>;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ProfileReport {
@@ -2613,6 +2857,7 @@ impl fmt::Debug for Function {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Function")
             .field("name", &self.name)
+            .field("is_async", &self.is_async)
             .field("type_params", &self.type_params)
             .field("params", &self.params)
             .field("return_type", &self.return_type)
@@ -2623,6 +2868,7 @@ impl fmt::Debug for Function {
 impl PartialEq for Function {
     fn eq(&self, other: &Self) -> bool {
         self.name == other.name
+            && self.is_async == other.is_async
             && self.type_params == other.type_params
             && self.params == other.params
             && self.return_type == other.return_type
@@ -2631,10 +2877,15 @@ impl PartialEq for Function {
 
 impl Function {
     fn signature_type(&self) -> Type {
+        let return_type = if self.is_async {
+            Type::Task(Box::new(self.return_type.clone()))
+        } else {
+            self.return_type.clone()
+        };
         Type::Function {
             type_params: self.type_params.clone(),
             params: self.params.iter().map(|param| param.ty.clone()).collect(),
-            return_type: Box::new(self.return_type.clone()),
+            return_type: Box::new(return_type),
         }
     }
 
@@ -2953,6 +3204,7 @@ impl Engine {
 
         let function = Rc::new(Function {
             name: builder.name.clone(),
+            is_async: false,
             type_params: builder.type_params,
             params: builder.params,
             return_type: builder.return_type,
@@ -3367,10 +3619,11 @@ impl Engine {
         vm.set_max_array_length(self.max_array_length);
         vm.set_max_map_entries(self.max_map_entries);
         vm.set_max_heap_objects(self.max_heap_objects);
-        match vm.execute(module)? {
+        let value = match vm.execute(module)? {
             Control::Value(value) => Ok(value),
             Control::Return(value) => Ok(value),
-        }
+        }?;
+        reject_top_level_task(value)
     }
 
     fn execute_profiled(
@@ -3398,7 +3651,7 @@ impl Engine {
             .borrow_mut()
             .record_call("<module>", start.elapsed());
         let report = profile.borrow().clone();
-        Ok((value, report))
+        Ok((reject_top_level_task(value)?, report))
     }
 
     fn root_env(&self) -> Env {
@@ -3407,6 +3660,21 @@ impl Engine {
             env.define(name.clone(), Value::Function(host.function.clone()));
         }
         env
+    }
+}
+
+fn reject_top_level_task(value: Value) -> Result<Value, Diagnostic> {
+    if let Value::Task(task) = value {
+        Err(Diagnostic::new(
+            format!(
+                "top-level async task {} must be awaited inside an async function",
+                task.payload_type()
+            ),
+            Span { start: 0, end: 0 },
+        )
+        .with_code("async.top-level-task"))
+    } else {
+        Ok(value)
     }
 }
 
@@ -3976,6 +4244,8 @@ fn stmt_span(statement: &Stmt) -> Span {
         | Stmt::Let { span, .. }
         | Stmt::TypeAlias { span, .. }
         | Stmt::Enum { span, .. }
+        | Stmt::Trait { span, .. }
+        | Stmt::Impl { span, .. }
         | Stmt::Function { span, .. }
         | Stmt::Record { span, .. }
         | Stmt::Return { span, .. }
@@ -4094,6 +4364,7 @@ fn collect_references_in_expr(expr: &Expr, references: &mut HashSet<String>) {
             }
         }
         ExprKind::Question { value } => collect_references_in_expr(value, references),
+        ExprKind::Await { value } => collect_references_in_expr(value, references),
         ExprKind::StringInterpolation(parts) => {
             for part in parts {
                 if let Some(expr) = &part.expression {
@@ -4274,8 +4545,57 @@ impl Formatter {
                 });
                 self.line("}");
             }
+            Stmt::Trait {
+                name,
+                methods,
+                exported,
+                ..
+            } => {
+                self.line(&format!("{}trait {name} {{", export_prefix(*exported)));
+                self.indented(|formatter| {
+                    for method in methods {
+                        let params = method
+                            .params
+                            .iter()
+                            .map(|param| format!("{}: {}", param.name, param.ty))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        formatter.line(&format!(
+                            "fn {}({params}) -> {};",
+                            method.name, method.return_type
+                        ));
+                    }
+                });
+                self.line("}");
+            }
+            Stmt::Impl {
+                trait_name,
+                target,
+                methods,
+                ..
+            } => {
+                self.line(&format!("impl {trait_name} for {target} {{"));
+                self.indented(|formatter| {
+                    for method in methods {
+                        let params = method
+                            .params
+                            .iter()
+                            .map(|param| format!("{}: {}", param.name, param.ty))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        formatter.line(&format!(
+                            "fn {}({params}) -> {} {{",
+                            method.name, method.return_type
+                        ));
+                        formatter.indented(|formatter| formatter.format_block_body(&method.body));
+                        formatter.line("}");
+                    }
+                });
+                self.line("}");
+            }
             Stmt::Function {
                 name,
+                is_async,
                 params,
                 return_type,
                 body,
@@ -4288,8 +4608,9 @@ impl Formatter {
                     .collect::<Vec<_>>()
                     .join(", ");
                 self.line(&format!(
-                    "{}fn {name}({params}) -> {return_type} {{",
-                    export_prefix(*exported)
+                    "{}{}fn {name}({params}) -> {return_type} {{",
+                    export_prefix(*exported),
+                    if *is_async { "async " } else { "" }
                 ));
                 self.indented(|formatter| formatter.format_block_body(body));
                 self.line("}");
@@ -4542,6 +4863,7 @@ fn format_expr_prec(expr: &Expr, parent_precedence: u8) -> String {
         ExprKind::Literal(value) => format_literal(value),
         ExprKind::StringInterpolation(parts) => format_interpolated_string(parts),
         ExprKind::Question { value } => format!("{}?", format_expr_prec(value, precedence)),
+        ExprKind::Await { value } => format!("await {}", format_expr_prec(value, precedence)),
         ExprKind::Variable(name) => name.clone(),
         ExprKind::Assign { name, value } => {
             format!("{name} = {}", format_expr_prec(value, precedence))
@@ -4684,7 +5006,8 @@ fn expr_precedence(expr: &Expr) -> u8 {
         ExprKind::Call { .. }
         | ExprKind::Index { .. }
         | ExprKind::Field { .. }
-        | ExprKind::Question { .. } => 13,
+        | ExprKind::Question { .. }
+        | ExprKind::Await { .. } => 13,
         ExprKind::Literal(_)
         | ExprKind::StringInterpolation(_)
         | ExprKind::Variable(_)
@@ -4723,6 +5046,7 @@ fn format_literal(value: &Value) -> String {
         | Value::Map(_)
         | Value::Option(_)
         | Value::Result(_)
+        | Value::Task(_)
         | Value::Enum(_)
         | Value::Record(_)
         | Value::Function(_) => value.to_string(),

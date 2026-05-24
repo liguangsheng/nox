@@ -19,6 +19,22 @@ struct EnumSchema {
 }
 
 #[derive(Debug, Clone)]
+struct TraitSchema {
+    methods: HashMap<String, TraitMethodSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TraitMethodSignature {
+    params: Vec<Type>,
+    return_type: Type,
+}
+
+#[derive(Debug, Clone)]
+struct ImplSchema {
+    methods: HashMap<String, TraitMethodSignature>,
+}
+
+#[derive(Debug, Clone)]
 struct Binding {
     ty: Type,
     is_const: bool,
@@ -29,15 +45,20 @@ pub(crate) struct TypeChecker {
     returns: Vec<Type>,
     records: HashMap<String, RecordSchema>,
     enums: HashMap<String, EnumSchema>,
+    traits: HashMap<String, TraitSchema>,
+    impls: HashMap<(String, String), ImplSchema>,
     type_aliases: HashMap<String, Type>,
     type_alias_spans: HashMap<String, Span>,
     hover_offset: Option<usize>,
     hover_type: Option<(Span, Type)>,
     loop_depth: usize,
+    async_context_depth: usize,
     expression_depth: usize,
     function_type_params: Vec<HashSet<String>>,
     function_constraints: HashMap<String, Vec<(String, Vec<ConstraintMarker>)>>,
+    function_trait_bounds: HashMap<String, Vec<(String, Vec<String>)>>,
     active_constraints: Vec<HashMap<String, Vec<ConstraintMarker>>>,
+    active_trait_bounds: Vec<HashMap<String, Vec<String>>>,
 }
 
 const MAX_TYPECHECK_EXPRESSION_DEPTH: usize = 128;
@@ -49,15 +70,20 @@ impl TypeChecker {
             returns: Vec::new(),
             records: HashMap::new(),
             enums: HashMap::new(),
+            traits: HashMap::new(),
+            impls: HashMap::new(),
             type_aliases: HashMap::new(),
             type_alias_spans: HashMap::new(),
             hover_offset: None,
             hover_type: None,
             loop_depth: 0,
+            async_context_depth: 0,
             expression_depth: 0,
             function_type_params: Vec::new(),
             function_constraints: HashMap::new(),
+            function_trait_bounds: HashMap::new(),
             active_constraints: Vec::new(),
+            active_trait_bounds: Vec::new(),
         }
     }
 
@@ -80,11 +106,13 @@ impl TypeChecker {
         self.collect_type_aliases(&module.statements)?;
         self.collect_records(&module.statements)?;
         self.collect_enums(&module.statements)?;
+        self.collect_traits(&module.statements)?;
         self.resolve_all_type_aliases()?;
         self.normalize_record_schemas()?;
         self.normalize_enum_schemas()?;
         self.validate_record_declarations(&module.statements)?;
         self.validate_enum_declarations(&module.statements)?;
+        self.collect_impls(&module.statements)?;
         self.check_statements(&module.statements).map(|_| ())
     }
 
@@ -97,12 +125,16 @@ impl TypeChecker {
             .map_err(|err| vec![err])?;
         self.collect_enums(&module.statements)
             .map_err(|err| vec![err])?;
+        self.collect_traits(&module.statements)
+            .map_err(|err| vec![err])?;
         self.resolve_all_type_aliases().map_err(|err| vec![err])?;
         self.normalize_record_schemas().map_err(|err| vec![err])?;
         self.normalize_enum_schemas().map_err(|err| vec![err])?;
         self.validate_record_declarations(&module.statements)
             .map_err(|err| vec![err])?;
         self.validate_enum_declarations(&module.statements)
+            .map_err(|err| vec![err])?;
+        self.collect_impls(&module.statements)
             .map_err(|err| vec![err])?;
         self.predeclare_functions(&module.statements)
             .map_err(|err| vec![err])?;
@@ -127,11 +159,13 @@ impl TypeChecker {
         self.collect_type_aliases(&module.statements)?;
         self.collect_records(&module.statements)?;
         self.collect_enums(&module.statements)?;
+        self.collect_traits(&module.statements)?;
         self.resolve_all_type_aliases()?;
         self.normalize_record_schemas()?;
         self.normalize_enum_schemas()?;
         self.validate_record_declarations(&module.statements)?;
         self.validate_enum_declarations(&module.statements)?;
+        self.collect_impls(&module.statements)?;
         self.check_statements(&module.statements)?;
         Ok(self.hover_type.map(|(_, ty)| ty))
     }
@@ -244,6 +278,179 @@ impl TypeChecker {
         Ok(())
     }
 
+    fn collect_traits(&mut self, statements: &[Stmt]) -> Result<(), Diagnostic> {
+        for statement in statements {
+            let Stmt::Trait {
+                name,
+                methods,
+                span,
+                ..
+            } = statement
+            else {
+                continue;
+            };
+            if self.traits.contains_key(name) {
+                return Err(
+                    Diagnostic::new(format!("trait '{name}' is already defined"), *span)
+                        .with_code("trait.duplicate"),
+                );
+            }
+            let mut method_map = HashMap::new();
+            for method in methods {
+                let params = method
+                    .params
+                    .iter()
+                    .map(|param| self.resolve_trait_signature_type(&param.ty, name, method.span))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let return_type =
+                    self.resolve_trait_signature_type(&method.return_type, name, method.span)?;
+                if method_map
+                    .insert(
+                        method.name.clone(),
+                        TraitMethodSignature {
+                            params,
+                            return_type,
+                        },
+                    )
+                    .is_some()
+                {
+                    return Err(Diagnostic::new(
+                        format!("trait '{name}' has duplicate method '{}'", method.name),
+                        method.span,
+                    )
+                    .with_code("trait.duplicate"));
+                }
+            }
+            self.traits.insert(
+                name.clone(),
+                TraitSchema {
+                    methods: method_map,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn collect_impls(&mut self, statements: &[Stmt]) -> Result<(), Diagnostic> {
+        let top_level_functions = statements
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Function { name, span, .. } => Some((name.as_str(), *span)),
+                _ => None,
+            })
+            .collect::<HashMap<_, _>>();
+        for statement in statements {
+            let Stmt::Impl {
+                trait_name,
+                target,
+                methods,
+                span,
+            } = statement
+            else {
+                continue;
+            };
+            let Some(trait_schema) = self.traits.get(trait_name).cloned() else {
+                return Err(
+                    Diagnostic::new(format!("trait '{trait_name}' is not defined"), *span)
+                        .with_code("trait.not-found"),
+                );
+            };
+            let target = self.resolve_type(target, *span)?;
+            let target_key = target.to_string();
+            let key = (trait_name.clone(), target_key.clone());
+            if self.impls.contains_key(&key) {
+                return Err(Diagnostic::new(
+                    format!("duplicate impl of trait '{trait_name}' for {target_key}"),
+                    *span,
+                )
+                .with_code("trait.impl-duplicate"));
+            }
+            if !matches!(
+                target,
+                Type::Null
+                    | Type::Bool
+                    | Type::Int
+                    | Type::Float
+                    | Type::Str
+                    | Type::Record(_)
+                    | Type::Enum(_)
+            ) {
+                return Err(Diagnostic::new(
+                    format!("impl target must be a primitive, record, or enum, got {target}"),
+                    *span,
+                )
+                .with_code("trait.impl-orphan"));
+            }
+            let mut method_map = HashMap::new();
+            for method in methods {
+                if top_level_functions.contains_key(method.name.as_str()) {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "impl method '{}' conflicts with a top-level function",
+                            method.name
+                        ),
+                        method.span,
+                    )
+                    .with_code("trait.method-ambiguous"));
+                }
+                let params = method
+                    .params
+                    .iter()
+                    .map(|param| self.resolve_type(&param.ty, method.span))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let return_type = self.resolve_type(&method.return_type, method.span)?;
+                let signature = TraitMethodSignature {
+                    params,
+                    return_type,
+                };
+                let Some(required) = trait_schema.methods.get(&method.name) else {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "trait '{trait_name}' has no required method '{}'",
+                            method.name
+                        ),
+                        method.span,
+                    )
+                    .with_code("trait.method-not-found"));
+                };
+                let required = substitute_self_in_signature(required, &target);
+                if signature != required {
+                    return Err(Diagnostic::new(
+                        format!(
+                            "impl method '{}' signature does not match trait '{trait_name}'",
+                            method.name
+                        ),
+                        method.span,
+                    )
+                    .with_code("trait.method-signature-mismatch"));
+                }
+                if method_map.insert(method.name.clone(), signature).is_some() {
+                    return Err(Diagnostic::new(
+                        format!("duplicate impl method '{}'", method.name),
+                        method.span,
+                    )
+                    .with_code("trait.impl-duplicate"));
+                }
+            }
+            for required in trait_schema.methods.keys() {
+                if !method_map.contains_key(required) {
+                    return Err(Diagnostic::new(
+                        format!("impl of trait '{trait_name}' for {target_key} is missing method '{required}'"),
+                        *span,
+                    )
+                    .with_code("trait.impl-incomplete"));
+                }
+            }
+            self.impls.insert(
+                key,
+                ImplSchema {
+                    methods: method_map,
+                },
+            );
+        }
+        Ok(())
+    }
+
     fn resolve_all_type_aliases(&mut self) -> Result<(), Diagnostic> {
         let names = self.type_aliases.keys().cloned().collect::<Vec<_>>();
         let mut resolved = HashMap::new();
@@ -294,6 +501,9 @@ impl TypeChecker {
                 ok: Box::new(self.resolve_type_aliases(ok, stack)?),
                 err: Box::new(self.resolve_type_aliases(err, stack)?),
             }),
+            Type::Task(value) => Ok(Type::Task(Box::new(
+                self.resolve_type_aliases(value, stack)?,
+            ))),
             Type::Record(name) if self.type_aliases.contains_key(name) => {
                 self.resolve_alias_name(name, stack)
             }
@@ -423,7 +633,10 @@ impl TypeChecker {
         for statement in statements {
             if let Stmt::Function {
                 name,
+                is_async,
                 type_params,
+                type_param_constraints,
+                type_param_trait_bounds,
                 params,
                 return_type,
                 span,
@@ -436,14 +649,36 @@ impl TypeChecker {
                     .collect::<Result<Vec<_>, _>>()?;
                 let resolved_return =
                     self.resolve_type_in_function(return_type, type_params, *span)?;
+                let visible_return = if *is_async {
+                    Type::Task(Box::new(resolved_return.clone()))
+                } else {
+                    resolved_return.clone()
+                };
                 self.define(
                     name.clone(),
                     Type::Function {
                         type_params: type_params.clone(),
                         params: resolved_params,
-                        return_type: Box::new(resolved_return),
+                        return_type: Box::new(visible_return),
                     },
                 );
+                let constraints = type_params
+                    .iter()
+                    .zip(type_param_constraints.iter())
+                    .map(|(name, markers)| (name.clone(), markers.clone()))
+                    .collect::<Vec<_>>();
+                if constraints.iter().any(|(_, markers)| !markers.is_empty()) {
+                    self.function_constraints.insert(name.clone(), constraints);
+                }
+                let trait_bounds = type_params
+                    .iter()
+                    .zip(type_param_trait_bounds.iter())
+                    .map(|(name, bounds)| (name.clone(), bounds.clone()))
+                    .collect::<Vec<_>>();
+                if trait_bounds.iter().any(|(_, bounds)| !bounds.is_empty()) {
+                    self.function_trait_bounds
+                        .insert(name.clone(), trait_bounds);
+                }
             }
         }
         Ok(())
@@ -521,8 +756,10 @@ impl TypeChecker {
             }
             Stmt::Function {
                 name,
+                is_async,
                 type_params,
                 type_param_constraints,
+                type_param_trait_bounds,
                 params,
                 return_type,
                 body,
@@ -534,10 +771,15 @@ impl TypeChecker {
                     .map(|param| self.resolve_type_in_function(&param.ty, type_params, *span))
                     .collect::<Result<Vec<_>, _>>()?;
                 let return_type = self.resolve_type_in_function(return_type, type_params, *span)?;
+                let visible_return = if *is_async {
+                    Type::Task(Box::new(return_type.clone()))
+                } else {
+                    return_type.clone()
+                };
                 let function_type = Type::Function {
                     type_params: type_params.clone(),
                     params: resolved_params.clone(),
-                    return_type: Box::new(return_type.clone()),
+                    return_type: Box::new(visible_return),
                 };
                 self.define(name.clone(), function_type);
 
@@ -557,9 +799,39 @@ impl TypeChecker {
                     }
                 }
                 self.active_constraints.push(active_scope);
+                let mut active_trait_scope: HashMap<String, Vec<String>> = HashMap::new();
+                if !type_params.is_empty() && !type_param_trait_bounds.is_empty() {
+                    let trait_bounds = type_params
+                        .iter()
+                        .zip(type_param_trait_bounds.iter())
+                        .map(|(name, bounds)| (name.clone(), bounds.clone()))
+                        .collect::<Vec<_>>();
+                    for (_, bounds) in &trait_bounds {
+                        for bound in bounds {
+                            if !self.traits.contains_key(bound) {
+                                return Err(Diagnostic::new(
+                                    format!("trait '{bound}' is not defined"),
+                                    *span,
+                                )
+                                .with_code("trait.not-found"));
+                            }
+                        }
+                    }
+                    if trait_bounds.iter().any(|(_, b)| !b.is_empty()) {
+                        self.function_trait_bounds
+                            .insert(name.clone(), trait_bounds.clone());
+                    }
+                    for (name, bounds) in trait_bounds {
+                        active_trait_scope.insert(name, bounds);
+                    }
+                }
+                self.active_trait_bounds.push(active_trait_scope);
 
                 self.function_type_params
                     .push(type_params.iter().cloned().collect());
+                if *is_async {
+                    self.async_context_depth += 1;
+                }
                 self.scopes.push(HashMap::new());
                 for (param, ty) in params.iter().zip(resolved_params) {
                     self.define(param.name.clone(), ty);
@@ -569,8 +841,12 @@ impl TypeChecker {
                 let result = self.check_statements(body);
                 self.returns.pop();
                 self.scopes.pop();
+                if *is_async {
+                    self.async_context_depth -= 1;
+                }
                 self.function_type_params.pop();
                 self.active_constraints.pop();
+                self.active_trait_bounds.pop();
                 let has_return = result?;
 
                 if !has_return {
@@ -581,7 +857,31 @@ impl TypeChecker {
                 }
                 Ok(false)
             }
-            Stmt::TypeAlias { .. } | Stmt::Enum { .. } | Stmt::Record { .. } => Ok(false),
+            Stmt::TypeAlias { .. }
+            | Stmt::Enum { .. }
+            | Stmt::Record { .. }
+            | Stmt::Trait { .. } => Ok(false),
+            Stmt::Impl { methods, .. } => {
+                for method in methods {
+                    let return_type = self.resolve_type(&method.return_type, method.span)?;
+                    self.scopes.push(HashMap::new());
+                    for param in &method.params {
+                        let ty = self.resolve_type(&param.ty, method.span)?;
+                        self.define(param.name.clone(), ty);
+                    }
+                    self.returns.push(return_type.clone());
+                    let result = self.check_statements(&method.body);
+                    self.returns.pop();
+                    self.scopes.pop();
+                    if !result? {
+                        return Err(Diagnostic::new(
+                            format!("impl method '{}' must return {return_type}", method.name),
+                            method.span,
+                        ));
+                    }
+                }
+                Ok(false)
+            }
             Stmt::Return { value, span } => {
                 let Some(expected) = self.returns.last().cloned() else {
                     return Err(Diagnostic::new("return outside function", *span));
@@ -741,6 +1041,23 @@ impl TypeChecker {
                     Ok(Type::Str)
                 }
                 ExprKind::Question { value } => self.check_question_expr(expr.span, value),
+                ExprKind::Await { value } => {
+                    if self.async_context_depth == 0 {
+                        return Err(Diagnostic::new(
+                            "'await' is only allowed inside async functions",
+                            expr.span,
+                        )
+                        .with_code("async.await-outside-async"));
+                    }
+                    match self.check_expr(value)? {
+                        Type::Task(payload) => Ok(*payload),
+                        other => Err(Diagnostic::new(
+                            format!("await expects task, got {other}"),
+                            expr.span,
+                        )
+                        .with_code("async.await-non-task")),
+                    }
+                }
                 ExprKind::Literal(Value::Array(_)) => {
                     Err(Diagnostic::new("array value cannot be literal", expr.span))
                 }
@@ -752,6 +1069,9 @@ impl TypeChecker {
                 }
                 ExprKind::Literal(Value::Result(_)) => {
                     Err(Diagnostic::new("result value cannot be literal", expr.span))
+                }
+                ExprKind::Literal(Value::Task(_)) => {
+                    Err(Diagnostic::new("task value cannot be literal", expr.span))
                 }
                 ExprKind::Literal(Value::Enum(_)) => {
                     Err(Diagnostic::new("enum value cannot be literal", expr.span))
@@ -1771,17 +2091,24 @@ impl TypeChecker {
     ) -> Result<Type, Diagnostic> {
         let receiver_type = self.check_expr(receiver)?;
         let Type::Record(record_name) = &receiver_type else {
-            return Err(
-                Diagnostic::new("method call requires a record value", receiver.span)
-                    .with_code("record.method-not-found"),
+            return self.check_trait_method_call(
+                span,
+                &receiver_type,
+                name,
+                name_span,
+                args,
+                paren_span,
             );
         };
         let Some(method_type) = self.lookup(name) else {
-            return Err(Diagnostic::new(
-                format!("record '{record_name}' has no method '{name}'"),
+            return self.check_trait_method_call(
+                span,
+                &receiver_type,
+                name,
                 name_span,
-            )
-            .with_code("record.method-not-found"));
+                args,
+                paren_span,
+            );
         };
         let Type::Function {
             type_params,
@@ -1829,6 +2156,84 @@ impl TypeChecker {
             self.instantiate_return_type(&return_type, None, &type_params, &bindings, span)?;
         self.record_hover_type(span, return_type.clone());
         Ok(return_type)
+    }
+
+    fn check_trait_method_call(
+        &mut self,
+        span: Span,
+        receiver_type: &Type,
+        name: &str,
+        name_span: Span,
+        args: &[Expr],
+        paren_span: Span,
+    ) -> Result<Type, Diagnostic> {
+        let candidates = self.trait_method_candidates(receiver_type, name);
+        if candidates.is_empty() {
+            if let Type::Record(record_name) = receiver_type {
+                return Err(Diagnostic::new(
+                    format!("record '{record_name}' has no method '{name}'"),
+                    name_span,
+                )
+                .with_code("record.method-not-found"));
+            }
+            return Err(Diagnostic::new(
+                format!("type '{receiver_type}' has no trait method '{name}'"),
+                name_span,
+            )
+            .with_code("trait.method-not-found"));
+        }
+        if candidates.len() > 1 {
+            return Err(Diagnostic::new(
+                format!("trait method '{name}' is ambiguous for type '{receiver_type}'"),
+                name_span,
+            )
+            .with_code("trait.method-ambiguous"));
+        }
+        let signature = candidates.into_iter().next().unwrap();
+        let expected_arg_count = signature.params.len().saturating_sub(1);
+        if args.len() != expected_arg_count {
+            return Err(Diagnostic::new(
+                format!(
+                    "expected {expected_arg_count} arguments but got {}",
+                    args.len()
+                ),
+                paren_span,
+            ));
+        }
+        if let Some(first) = signature.params.first() {
+            self.expect_type(first, receiver_type, span)?;
+        }
+        for (expected, arg) in signature.params.iter().skip(1).zip(args) {
+            let actual = self.check_expr_with_expected(arg, Some(expected))?;
+            self.expect_type(expected, &actual, arg.span)?;
+        }
+        self.record_hover_type(span, signature.return_type.clone());
+        Ok(signature.return_type)
+    }
+
+    fn trait_method_candidates(
+        &self,
+        receiver_type: &Type,
+        name: &str,
+    ) -> Vec<TraitMethodSignature> {
+        match receiver_type {
+            Type::Generic(param) => self
+                .active_trait_bounds
+                .last()
+                .and_then(|active| active.get(param))
+                .into_iter()
+                .flatten()
+                .filter_map(|trait_name| self.traits.get(trait_name))
+                .filter_map(|schema| schema.methods.get(name))
+                .map(|signature| substitute_self_in_signature(signature, receiver_type))
+                .collect(),
+            other => self
+                .impls
+                .iter()
+                .filter(|((_, target), _)| target == &other.to_string())
+                .filter_map(|(_, schema)| schema.methods.get(name).cloned())
+                .collect(),
+        }
     }
 
     fn check_enum_constructor(
@@ -2007,30 +2412,60 @@ impl TypeChecker {
         bindings: &HashMap<String, Type>,
         span: Span,
     ) -> Result<(), Diagnostic> {
-        let Some(constraints) = self.function_constraints.get(function_name) else {
-            return Ok(());
-        };
-        for (param_name, markers) in constraints {
-            if markers.is_empty() {
-                continue;
+        if let Some(constraints) = self.function_constraints.get(function_name) {
+            for (param_name, markers) in constraints {
+                if markers.is_empty() {
+                    continue;
+                }
+                let Some(bound) = bindings.get(param_name) else {
+                    continue;
+                };
+                for marker in markers {
+                    if !self.type_satisfies_marker(bound, *marker) {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "type '{bound}' does not implement constraint '{}' required by generic parameter '{param_name}' of function '{function_name}'",
+                                marker.as_str()
+                            ),
+                            span,
+                        )
+                        .with_code("generic.constraint-unsatisfied"));
+                    }
+                }
             }
-            let Some(bound) = bindings.get(param_name) else {
-                continue;
-            };
-            for marker in markers {
-                if !self.type_satisfies_marker(bound, *marker) {
-                    return Err(Diagnostic::new(
-                        format!(
-                            "type '{bound}' does not implement constraint '{}' required by generic parameter '{param_name}' of function '{function_name}'",
-                            marker.as_str()
-                        ),
-                        span,
-                    )
-                    .with_code("generic.constraint-unsatisfied"));
+        }
+        if let Some(trait_bounds) = self.function_trait_bounds.get(function_name) {
+            for (param_name, bounds) in trait_bounds {
+                let Some(bound_type) = bindings.get(param_name) else {
+                    continue;
+                };
+                for trait_name in bounds {
+                    if !self.type_satisfies_trait(bound_type, trait_name) {
+                        return Err(Diagnostic::new(
+                            format!(
+                                "type '{bound_type}' does not implement trait '{trait_name}' required by generic parameter '{param_name}' of function '{function_name}'"
+                            ),
+                            span,
+                        )
+                        .with_code("trait.bound-unsatisfied"));
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    fn type_satisfies_trait(&self, ty: &Type, trait_name: &str) -> bool {
+        if let Type::Generic(name) = ty {
+            if let Some(active) = self.active_trait_bounds.last() {
+                if let Some(bounds) = active.get(name) {
+                    return bounds.iter().any(|bound| bound == trait_name);
+                }
+            }
+            return false;
+        }
+        self.impls
+            .contains_key(&(trait_name.to_string(), ty.to_string()))
     }
 
     fn type_satisfies_marker(&self, ty: &Type, marker: ConstraintMarker) -> bool {
@@ -2217,6 +2652,9 @@ impl TypeChecker {
                 ok: Box::new(self.substitute_generic_type(ok, bindings, span)?),
                 err: Box::new(self.substitute_generic_type(err, bindings, span)?),
             }),
+            Type::Task(value) => Ok(Type::Task(Box::new(
+                self.substitute_generic_type(value, bindings, span)?,
+            ))),
             Type::Function { .. } => Ok(ty.clone()),
             other => Ok(other.clone()),
         }
@@ -2270,6 +2708,33 @@ impl TypeChecker {
         Ok(resolved)
     }
 
+    fn resolve_trait_signature_type(
+        &self,
+        ty: &Type,
+        trait_name: &str,
+        span: Span,
+    ) -> Result<Type, Diagnostic> {
+        let resolved = self.resolve_type_aliases(ty, &mut Vec::new())?;
+        let resolved = self.mark_generic_types(
+            &resolved,
+            &std::iter::once("Self".to_string()).collect::<HashSet<_>>(),
+        );
+        let resolved = self.resolve_named_type(&resolved);
+        self.validate_type_with_generics(
+            &resolved,
+            span,
+            &std::iter::once("Self".to_string()).collect::<HashSet<_>>(),
+        )
+        .map_err(|_| {
+            Diagnostic::new(
+                format!("trait '{trait_name}' method uses invalid type"),
+                span,
+            )
+            .with_code("trait.method-signature-mismatch")
+        })?;
+        Ok(resolved)
+    }
+
     fn mark_generic_types(&self, ty: &Type, type_params: &HashSet<String>) -> Type {
         match ty {
             Type::Array(element) => {
@@ -2289,6 +2754,7 @@ impl TypeChecker {
                 ok: Box::new(self.mark_generic_types(ok, type_params)),
                 err: Box::new(self.mark_generic_types(err, type_params)),
             },
+            Type::Task(value) => Type::Task(Box::new(self.mark_generic_types(value, type_params))),
             Type::Record(name) if type_params.contains(name) => Type::Generic(name.clone()),
             Type::Function {
                 type_params: nested_type_params,
@@ -2321,6 +2787,7 @@ impl TypeChecker {
                 ok: Box::new(self.resolve_named_type(ok)),
                 err: Box::new(self.resolve_named_type(err)),
             },
+            Type::Task(value) => Type::Task(Box::new(self.resolve_named_type(value))),
             Type::Record(name) if self.enums.contains_key(name) => Type::Enum(name.clone()),
             Type::Function {
                 type_params,
@@ -2346,7 +2813,9 @@ impl TypeChecker {
         }
         match ty {
             Type::Null | Type::Bool | Type::Int | Type::Float | Type::Str | Type::Json => Ok(()),
-            Type::Array(element) | Type::Map(element) => self.validate_type(element, span),
+            Type::Array(element) | Type::Map(element) | Type::Task(element) => {
+                self.validate_type(element, span)
+            }
             Type::Tuple(elements) => {
                 if elements.len() < 2 {
                     return Err(
@@ -2402,7 +2871,7 @@ impl TypeChecker {
                     span,
                 ))
             }
-            Type::Array(element) | Type::Map(element) => {
+            Type::Array(element) | Type::Map(element) | Type::Task(element) => {
                 self.validate_type_with_generics(element, span, type_params)
             }
             Type::Tuple(elements) => {
@@ -2618,6 +3087,7 @@ fn top_level_declaration(statement: &Stmt) -> Option<(&str, Span)> {
         Stmt::Function { name, span, .. }
         | Stmt::Record { name, span, .. }
         | Stmt::Enum { name, span, .. }
+        | Stmt::Trait { name, span, .. }
         | Stmt::TypeAlias { name, span, .. } => Some((name, *span)),
         _ => None,
     }
@@ -2704,7 +3174,7 @@ fn patterns_cover_type<'a>(
 fn contains_generic_type(ty: &Type) -> bool {
     match ty {
         Type::Generic(_) => true,
-        Type::Array(element) | Type::Map(element) | Type::Option(element) => {
+        Type::Array(element) | Type::Map(element) | Type::Option(element) | Type::Task(element) => {
             contains_generic_type(element)
         }
         Type::Tuple(elements) => elements.iter().any(contains_generic_type),
@@ -2790,6 +3260,53 @@ fn append_did_you_mean(message: String, suggestion: Option<String>) -> String {
     match suggestion {
         Some(s) => format!("{message}, did you mean '{s}'?"),
         None => message,
+    }
+}
+
+fn substitute_self_in_signature(
+    signature: &TraitMethodSignature,
+    self_type: &Type,
+) -> TraitMethodSignature {
+    TraitMethodSignature {
+        params: signature
+            .params
+            .iter()
+            .map(|param| substitute_self_type(param, self_type))
+            .collect(),
+        return_type: substitute_self_type(&signature.return_type, self_type),
+    }
+}
+
+fn substitute_self_type(ty: &Type, self_type: &Type) -> Type {
+    match ty {
+        Type::Generic(name) if name == "Self" => self_type.clone(),
+        Type::Array(element) => Type::Array(Box::new(substitute_self_type(element, self_type))),
+        Type::Tuple(elements) => Type::Tuple(
+            elements
+                .iter()
+                .map(|element| substitute_self_type(element, self_type))
+                .collect(),
+        ),
+        Type::Map(value) => Type::Map(Box::new(substitute_self_type(value, self_type))),
+        Type::Option(value) => Type::Option(Box::new(substitute_self_type(value, self_type))),
+        Type::Result { ok, err } => Type::Result {
+            ok: Box::new(substitute_self_type(ok, self_type)),
+            err: Box::new(substitute_self_type(err, self_type)),
+        },
+        Type::Task(value) => Type::Task(Box::new(substitute_self_type(value, self_type))),
+        Type::Function {
+            type_params,
+            params,
+            return_type,
+        } => Type::Function {
+            type_params: type_params.clone(),
+            params: params
+                .iter()
+                .map(|param| substitute_self_type(param, self_type))
+                .collect(),
+            return_type: Box::new(substitute_self_type(return_type, self_type)),
+        },
+        other => other.clone(),
     }
 }
 

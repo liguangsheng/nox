@@ -4,6 +4,11 @@
 - 日期：2026-05-21
 - 涉及：语言 / 堆 / ABI / 工具链
 
+本文是历史 ADR。当前容器 mutation 与函数值能力已经分别被
+[0018 - 重启可变集合与 slice 设计](0018-restart-mutable-collections-and-slice.md) 和
+[0019 - 重启函数值、闭包与高阶函数设计](0019-restart-function-values-and-closures.md)
+取代；仍暂缓的边界包括 slice 语法和跨 C ABI function handle。
+
 ## 背景
 
 阶段 27.3 在 v0.0.4 语言设计闸门里重新评估 0010 和 0011 的暂缓项。评估依据来自

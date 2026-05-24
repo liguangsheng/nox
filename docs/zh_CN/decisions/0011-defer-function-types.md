@@ -4,6 +4,10 @@
 - 日期：2026-05-21
 - 涉及：语言 / ABI / 工具链
 
+本文是历史 ADR。当前源码级 `fn(T) -> U` 类型、lambda、函数值和受限高阶 helper 已按
+[0019 - 重启函数值、闭包与高阶函数设计](0019-restart-function-values-and-closures.md)
+落地；跨 C ABI 的 function handle 仍未进入稳定表面。
+
 ## 背景
 
 Nox 当前已经有函数声明、函数调用和内部函数签名类型：

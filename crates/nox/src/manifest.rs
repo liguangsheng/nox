@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Component, Path, PathBuf},
 };
@@ -7,6 +7,7 @@ use std::{
 use nox_core::{Diagnostic, Span};
 
 pub const MANIFEST_FILE_NAME: &str = "nox.toml";
+pub const LOCK_FILE_NAME: &str = "nox.lock";
 
 #[derive(Debug, Clone)]
 pub struct Manifest {
@@ -14,6 +15,7 @@ pub struct Manifest {
     pub package: PackageInfo,
     pub entrypoints: Entrypoints,
     pub modules: Modules,
+    pub dependencies: Vec<DependencyDecl>,
     pub runtime: RuntimeDecl,
 }
 
@@ -34,6 +36,79 @@ pub struct Entrypoints {
 pub struct Modules {
     pub source_dirs: Vec<PathBuf>,
     pub test_dirs: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyDecl {
+    pub name: String,
+    pub source: DependencySource,
+    pub pin: DependencyPin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencySource {
+    GitHub(String),
+    Git(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyPin {
+    Rev(String),
+    Tag(String),
+}
+
+impl DependencySource {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            DependencySource::GitHub(_) => "github",
+            DependencySource::Git(_) => "git",
+        }
+    }
+
+    pub fn value(&self) -> &str {
+        match self {
+            DependencySource::GitHub(value) | DependencySource::Git(value) => value,
+        }
+    }
+}
+
+impl DependencyPin {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            DependencyPin::Rev(_) => "rev",
+            DependencyPin::Tag(_) => "tag",
+        }
+    }
+
+    pub fn value(&self) -> &str {
+        match self {
+            DependencyPin::Rev(value) | DependencyPin::Tag(value) => value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Lockfile {
+    pub dependencies: Vec<LockedDependency>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LockedDependency {
+    pub name: String,
+    pub source: DependencySource,
+    pub pin: DependencyPin,
+    pub resolved: String,
+    pub content_hash: String,
+    pub cache_key: String,
+    pub tool: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LockfileValidation {
+    pub path: PathBuf,
+    pub ok: bool,
+    pub status: &'static str,
+    pub diagnostics: Vec<Diagnostic>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -140,6 +215,11 @@ impl Manifest {
             }
         }
 
+        let dependencies = match document.section("dependencies") {
+            Some(section) => parse_dependencies(section)?,
+            None => Vec::new(),
+        };
+
         let mut runtime = RuntimeDecl::default();
         if let Some(section) = document.section("runtime") {
             if let Some(values) = section.require_string_array("permissions")? {
@@ -159,6 +239,7 @@ impl Manifest {
             },
             entrypoints,
             modules,
+            dependencies,
             runtime,
         })
     }
@@ -187,6 +268,114 @@ impl Manifest {
     }
 }
 
+impl Lockfile {
+    pub fn load(path: &Path) -> Result<Lockfile, Diagnostic> {
+        let source = fs::read_to_string(path).map_err(|err| {
+            lockfile_error(format!(
+                "failed to read lockfile '{}': {err}",
+                path.display()
+            ))
+        })?;
+        Lockfile::parse(&source)
+    }
+
+    pub fn parse(source: &str) -> Result<Lockfile, Diagnostic> {
+        let document = parse_toml(source)
+            .map_err(|err| lockfile_error(format!("failed to parse lockfile: {}", err.message)))?;
+        let lock = document
+            .section("lock")
+            .ok_or_else(|| lockfile_error("lockfile is missing required section [lock]"))?;
+        let version = lock
+            .require_string("version")
+            .map_err(|err| lockfile_error(err.message))?
+            .ok_or_else(|| lockfile_error("lockfile [lock] is missing required key 'version'"))?;
+        if version != "1" {
+            return Err(lockfile_error(format!(
+                "lockfile version '{version}' is not supported"
+            )));
+        }
+
+        let mut dependencies = Vec::new();
+        for section in &document.sections {
+            let Some(name) = section.name.strip_prefix("dependencies.") else {
+                if section.name != "lock" {
+                    return Err(lockfile_error(format!(
+                        "lockfile section [{}] is not supported",
+                        section.name
+                    )));
+                }
+                continue;
+            };
+            dependencies.push(parse_locked_dependency(name, section)?);
+        }
+        Ok(Lockfile { dependencies })
+    }
+
+    pub fn to_source(&self) -> String {
+        let mut source = String::from("[lock]\nversion = \"1\"\n");
+        for dependency in &self.dependencies {
+            source.push_str("\n[dependencies.");
+            source.push_str(&dependency.name);
+            source.push_str("]\n");
+            source.push_str(&format!(
+                "source_kind = \"{}\"\nsource = \"{}\"\npin_kind = \"{}\"\npin = \"{}\"\nresolved = \"{}\"\ncontent_hash = \"{}\"\ncache_key = \"{}\"\ntool = \"{}\"\n",
+                dependency.source.kind(),
+                dependency.source.value(),
+                dependency.pin.kind(),
+                dependency.pin.value(),
+                dependency.resolved,
+                dependency.content_hash,
+                dependency.cache_key,
+                dependency.tool
+            ));
+        }
+        source
+    }
+}
+
+pub fn validate_lockfile_for_manifest(manifest: &Manifest) -> LockfileValidation {
+    let path = manifest.root.join(LOCK_FILE_NAME);
+    if manifest.dependencies.is_empty() {
+        return LockfileValidation {
+            path,
+            ok: true,
+            status: "not_required",
+            diagnostics: Vec::new(),
+        };
+    }
+    if !path.is_file() {
+        return LockfileValidation {
+            path,
+            ok: false,
+            status: "missing",
+            diagnostics: vec![lockfile_error(format!(
+                "{LOCK_FILE_NAME} is required when [dependencies] is present"
+            ))],
+        };
+    }
+    match Lockfile::load(&path) {
+        Ok(lockfile) => {
+            let diagnostics = compare_lockfile(manifest, &lockfile);
+            LockfileValidation {
+                path,
+                ok: diagnostics.is_empty(),
+                status: if diagnostics.is_empty() {
+                    "ok"
+                } else {
+                    "drift"
+                },
+                diagnostics,
+            }
+        }
+        Err(err) => LockfileValidation {
+            path,
+            ok: false,
+            status: "invalid",
+            diagnostics: vec![err],
+        },
+    }
+}
+
 fn parse_runtime_permission(value: &str) -> Result<RuntimePermissionDecl, Diagnostic> {
     match value {
         "filesystem.read" => Ok(RuntimePermissionDecl::FilesystemRead),
@@ -206,6 +395,10 @@ fn manifest_error(message: impl Into<String>) -> Diagnostic {
     Diagnostic::new(message, Span { start: 0, end: 0 }).with_code("manifest.invalid")
 }
 
+fn lockfile_error(message: impl Into<String>) -> Diagnostic {
+    Diagnostic::new(message, Span { start: 0, end: 0 }).with_code("lockfile.invalid")
+}
+
 fn validate_manifest_schema(document: &TomlDocument) -> Result<(), Diagnostic> {
     for section in &document.sections {
         match section.name.as_str() {
@@ -220,6 +413,7 @@ fn validate_manifest_schema(document: &TomlDocument) -> Result<(), Diagnostic> {
                 &["source_dirs", "test_dirs"],
                 "manifest section [modules]",
             )?,
+            "dependencies" => {}
             "runtime" => {
                 validate_known_keys(section, &["permissions"], "manifest section [runtime]")?
             }
@@ -244,6 +438,312 @@ fn validate_known_keys(
                 "{label} contains unsupported key '{key}'"
             )));
         }
+    }
+    Ok(())
+}
+
+fn parse_locked_dependency(
+    name: &str,
+    section: &TomlSection,
+) -> Result<LockedDependency, Diagnostic> {
+    validate_known_keys(
+        section,
+        &[
+            "source_kind",
+            "source",
+            "pin_kind",
+            "pin",
+            "resolved",
+            "content_hash",
+            "cache_key",
+            "tool",
+        ],
+        &format!("lockfile section [dependencies.{name}]"),
+    )
+    .map_err(|err| lockfile_error(err.message))?;
+
+    let source_kind = required_lock_string(section, name, "source_kind")?;
+    let source_value = required_lock_string(section, name, "source")?;
+    let source = match source_kind.as_str() {
+        "github" => {
+            validate_github_source(name, &source_value)
+                .map_err(|err| lockfile_error(err.message))?;
+            DependencySource::GitHub(source_value)
+        }
+        "git" => {
+            validate_git_source(name, &source_value).map_err(|err| lockfile_error(err.message))?;
+            DependencySource::Git(source_value)
+        }
+        _ => {
+            return Err(lockfile_error(format!(
+                "lockfile dependency '{name}' has unsupported source_kind '{source_kind}'"
+            )));
+        }
+    };
+
+    let pin_kind = required_lock_string(section, name, "pin_kind")?;
+    let pin_value = required_lock_string(section, name, "pin")?;
+    let pin = match pin_kind.as_str() {
+        "rev" => {
+            validate_rev_pin(name, &pin_value).map_err(|err| lockfile_error(err.message))?;
+            DependencyPin::Rev(pin_value)
+        }
+        "tag" => {
+            validate_tag_pin(name, &pin_value).map_err(|err| lockfile_error(err.message))?;
+            DependencyPin::Tag(pin_value)
+        }
+        _ => {
+            return Err(lockfile_error(format!(
+                "lockfile dependency '{name}' has unsupported pin_kind '{pin_kind}'"
+            )));
+        }
+    };
+
+    let resolved = required_lock_string(section, name, "resolved")?;
+    validate_rev_pin(name, &resolved).map_err(|err| {
+        lockfile_error(format!(
+            "lockfile dependency '{name}' resolved commit is invalid: {}",
+            err.message
+        ))
+    })?;
+    let content_hash = required_lock_string(section, name, "content_hash")?;
+    validate_content_hash(name, &content_hash)?;
+    let cache_key = required_lock_string(section, name, "cache_key")?;
+    if cache_key.is_empty() {
+        return Err(lockfile_error(format!(
+            "lockfile dependency '{name}' cache_key must be non-empty"
+        )));
+    }
+    let tool = required_lock_string(section, name, "tool")?;
+    if tool.is_empty() {
+        return Err(lockfile_error(format!(
+            "lockfile dependency '{name}' tool must be non-empty"
+        )));
+    }
+
+    Ok(LockedDependency {
+        name: name.to_string(),
+        source,
+        pin,
+        resolved,
+        content_hash,
+        cache_key,
+        tool,
+    })
+}
+
+fn required_lock_string(
+    section: &TomlSection,
+    name: &str,
+    key: &str,
+) -> Result<String, Diagnostic> {
+    section
+        .require_string(key)
+        .map_err(|err| lockfile_error(err.message))?
+        .ok_or_else(|| {
+            lockfile_error(format!(
+                "lockfile dependency '{name}' is missing required key '{key}'"
+            ))
+        })
+}
+
+fn validate_content_hash(name: &str, value: &str) -> Result<(), Diagnostic> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err(lockfile_error(format!(
+            "lockfile dependency '{name}' content_hash must use 'sha256:<hex>'"
+        )));
+    };
+    if hex.len() != 64 || !hex.chars().all(|character| character.is_ascii_hexdigit()) {
+        return Err(lockfile_error(format!(
+            "lockfile dependency '{name}' content_hash must contain a 64-character SHA-256 hex digest"
+        )));
+    }
+    Ok(())
+}
+
+fn compare_lockfile(manifest: &Manifest, lockfile: &Lockfile) -> Vec<Diagnostic> {
+    let manifest_names = manifest
+        .dependencies
+        .iter()
+        .map(|dependency| dependency.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let lock_names = lockfile
+        .dependencies
+        .iter()
+        .map(|dependency| dependency.name.as_str())
+        .collect::<BTreeSet<_>>();
+    let mut diagnostics = Vec::new();
+
+    for dependency in &manifest.dependencies {
+        let Some(locked) = lockfile
+            .dependencies
+            .iter()
+            .find(|locked| locked.name == dependency.name)
+        else {
+            diagnostics.push(lockfile_error(format!(
+                "lockfile is missing dependency '{}'",
+                dependency.name
+            )));
+            continue;
+        };
+        if locked.source != dependency.source {
+            diagnostics.push(lockfile_error(format!(
+                "lockfile dependency '{}' source does not match manifest",
+                dependency.name
+            )));
+        }
+        if locked.pin != dependency.pin {
+            diagnostics.push(lockfile_error(format!(
+                "lockfile dependency '{}' pin does not match manifest",
+                dependency.name
+            )));
+        }
+    }
+
+    for extra in lock_names.difference(&manifest_names) {
+        diagnostics.push(lockfile_error(format!(
+            "lockfile contains dependency '{extra}' that is not declared in manifest"
+        )));
+    }
+
+    diagnostics
+}
+
+fn parse_dependencies(section: &TomlSection) -> Result<Vec<DependencyDecl>, Diagnostic> {
+    let mut dependencies = Vec::new();
+    for (name, value) in &section.entries {
+        let TomlValue::InlineTable(table) = value else {
+            return Err(manifest_error(format!(
+                "manifest key 'dependencies.{name}' must be an inline table"
+            )));
+        };
+        dependencies.push(parse_dependency(name, table)?);
+    }
+    Ok(dependencies)
+}
+
+fn parse_dependency(
+    name: &str,
+    table: &BTreeMap<String, TomlValue>,
+) -> Result<DependencyDecl, Diagnostic> {
+    validate_dependency_keys(name, table)?;
+    let github = dependency_string(name, table, "github")?;
+    let git = dependency_string(name, table, "git")?;
+    let source = match (github, git) {
+        (Some(github), None) => {
+            validate_github_source(name, &github)?;
+            DependencySource::GitHub(github)
+        }
+        (None, Some(git)) => {
+            validate_git_source(name, &git)?;
+            DependencySource::Git(git)
+        }
+        (Some(_), Some(_)) => {
+            return Err(manifest_error(format!(
+                "manifest dependency '{name}' must specify only one source: github or git"
+            )));
+        }
+        (None, None) => {
+            return Err(manifest_error(format!(
+                "manifest dependency '{name}' is missing source key 'github' or 'git'"
+            )));
+        }
+    };
+
+    let rev = dependency_string(name, table, "rev")?;
+    let tag = dependency_string(name, table, "tag")?;
+    let pin = match (rev, tag) {
+        (Some(rev), None) => {
+            validate_rev_pin(name, &rev)?;
+            DependencyPin::Rev(rev)
+        }
+        (None, Some(tag)) => {
+            validate_tag_pin(name, &tag)?;
+            DependencyPin::Tag(tag)
+        }
+        (Some(_), Some(_)) => {
+            return Err(manifest_error(format!(
+                "manifest dependency '{name}' must specify only one pin: rev or tag"
+            )));
+        }
+        (None, None) => {
+            return Err(manifest_error(format!(
+                "manifest dependency '{name}' is missing required pin 'rev' or 'tag'"
+            )));
+        }
+    };
+
+    Ok(DependencyDecl {
+        name: name.to_string(),
+        source,
+        pin,
+    })
+}
+
+fn validate_dependency_keys(
+    name: &str,
+    table: &BTreeMap<String, TomlValue>,
+) -> Result<(), Diagnostic> {
+    for key in table.keys() {
+        if !["github", "git", "rev", "tag"].contains(&key.as_str()) {
+            return Err(manifest_error(format!(
+                "manifest dependency '{name}' contains unsupported key '{key}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn dependency_string(
+    name: &str,
+    table: &BTreeMap<String, TomlValue>,
+    key: &str,
+) -> Result<Option<String>, Diagnostic> {
+    match table.get(key) {
+        None => Ok(None),
+        Some(TomlValue::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(manifest_error(format!(
+            "manifest dependency '{name}' key '{key}' must be a string"
+        ))),
+    }
+}
+
+fn validate_github_source(name: &str, value: &str) -> Result<(), Diagnostic> {
+    let parts = value.split('/').collect::<Vec<_>>();
+    if parts.len() != 2 || parts.iter().any(|part| part.is_empty()) || value.contains("://") {
+        return Err(manifest_error(format!(
+            "manifest dependency '{name}' github source must use 'owner/repo'"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_git_source(name: &str, value: &str) -> Result<(), Diagnostic> {
+    if !(value.starts_with("https://")
+        || value.starts_with("ssh://")
+        || value.starts_with("file://"))
+    {
+        return Err(manifest_error(format!(
+            "manifest dependency '{name}' git source must be an https://, ssh://, or file:// URL"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_rev_pin(name: &str, value: &str) -> Result<(), Diagnostic> {
+    if value.len() != 40 || !value.chars().all(|character| character.is_ascii_hexdigit()) {
+        return Err(manifest_error(format!(
+            "manifest dependency '{name}' rev pin must be a full 40-character commit hash"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_tag_pin(name: &str, value: &str) -> Result<(), Diagnostic> {
+    if value.is_empty() || value.chars().any(char::is_whitespace) {
+        return Err(manifest_error(format!(
+            "manifest dependency '{name}' tag pin must be a non-empty tag without whitespace"
+        )));
     }
     Ok(())
 }
@@ -349,6 +849,7 @@ impl TomlSection {
 enum TomlValue {
     String(String),
     Array(Vec<TomlValue>),
+    InlineTable(BTreeMap<String, TomlValue>),
 }
 
 fn parse_toml(source: &str) -> Result<TomlDocument, Diagnostic> {
@@ -400,9 +901,7 @@ fn parse_toml(source: &str) -> Result<TomlDocument, Diagnostic> {
                 "manifest line {line_number}: empty key"
             )));
         }
-        if !key.chars().all(|character| {
-            character.is_ascii_alphanumeric() || character == '_' || character == '-'
-        }) {
+        if !is_toml_key(key) {
             return Err(manifest_error(format!(
                 "manifest line {line_number}: key '{key}' contains unsupported characters"
             )));
@@ -442,6 +941,15 @@ fn strip_comment(line: &str) -> &str {
 }
 
 fn parse_value(text: &str, line_number: usize) -> Result<TomlValue, Diagnostic> {
+    if let Some(rest) = text.strip_prefix('{') {
+        let Some(inner) = rest.strip_suffix('}') else {
+            return Err(manifest_error(format!(
+                "manifest line {line_number}: inline table missing '}}'"
+            )));
+        };
+        return parse_inline_table(inner.trim(), line_number);
+    }
+
     if let Some(rest) = text.strip_prefix('[') {
         let Some(inner) = rest.strip_suffix(']') else {
             return Err(manifest_error(format!(
@@ -483,6 +991,38 @@ fn parse_value(text: &str, line_number: usize) -> Result<TomlValue, Diagnostic> 
     Err(manifest_error(format!(
         "manifest line {line_number}: only string or string-array values are supported"
     )))
+}
+
+fn parse_inline_table(text: &str, line_number: usize) -> Result<TomlValue, Diagnostic> {
+    let mut table = BTreeMap::new();
+    if text.is_empty() {
+        return Ok(TomlValue::InlineTable(table));
+    }
+    for entry in split_array_entries(text, line_number)? {
+        let Some((key, value)) = entry.split_once('=') else {
+            return Err(manifest_error(format!(
+                "manifest line {line_number}: expected 'key = value' in inline table"
+            )));
+        };
+        let key = key.trim();
+        if key.is_empty() || !is_toml_key(key) {
+            return Err(manifest_error(format!(
+                "manifest line {line_number}: inline table key '{key}' contains unsupported characters"
+            )));
+        }
+        if table.contains_key(key) {
+            return Err(manifest_error(format!(
+                "manifest line {line_number}: duplicate inline table key '{key}'"
+            )));
+        }
+        table.insert(key.to_string(), parse_value(value.trim(), line_number)?);
+    }
+    Ok(TomlValue::InlineTable(table))
+}
+
+fn is_toml_key(key: &str) -> bool {
+    key.chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
 }
 
 fn split_array_entries(text: &str, line_number: usize) -> Result<Vec<String>, Diagnostic> {
@@ -532,6 +1072,7 @@ version = "0.0.1"
         assert_eq!(manifest.package.version, "0.0.1");
         assert!(manifest.entrypoints.main.is_none());
         assert!(manifest.modules.source_dirs.is_empty());
+        assert!(manifest.dependencies.is_empty());
     }
 
     #[test]
@@ -585,6 +1126,177 @@ permissions = ["filesystem.read", "environment", "async_tasks"]
                 RuntimePermissionDecl::AsyncTasks
             ]
         );
+    }
+
+    #[test]
+    fn parses_pinned_git_dependencies() {
+        let source = r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[dependencies]
+mathx = { github = "owner/mathx", rev = "0123456789abcdef0123456789abcdef01234567" }
+tools = { git = "https://github.com/owner/tools.git", tag = "v0.2.0" }
+"#;
+        let manifest = Manifest::parse(source, root()).unwrap();
+        assert_eq!(
+            manifest.dependencies,
+            vec![
+                DependencyDecl {
+                    name: "mathx".to_string(),
+                    source: DependencySource::GitHub("owner/mathx".to_string()),
+                    pin: DependencyPin::Rev("0123456789abcdef0123456789abcdef01234567".to_string()),
+                },
+                DependencyDecl {
+                    name: "tools".to_string(),
+                    source: DependencySource::Git("https://github.com/owner/tools.git".to_string()),
+                    pin: DependencyPin::Tag("v0.2.0".to_string()),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unpinned_or_ambiguous_dependencies() {
+        for (source, message) in [
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[dependencies]
+mathx = { github = "owner/mathx" }
+"#,
+                "missing required pin",
+            ),
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[dependencies]
+mathx = { github = "owner/mathx", git = "https://github.com/owner/mathx.git", rev = "0123456789abcdef0123456789abcdef01234567" }
+"#,
+                "only one source",
+            ),
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[dependencies]
+mathx = { github = "owner/mathx", rev = "main" }
+"#,
+                "full 40-character commit hash",
+            ),
+        ] {
+            let err = Manifest::parse(source, root()).unwrap_err();
+            assert_eq!(err.code, "manifest.invalid");
+            assert!(
+                err.message.contains(message),
+                "expected {message:?}, got {:?}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn parses_and_renders_lockfile() {
+        let source = r#"
+[lock]
+version = "1"
+
+[dependencies.mathx]
+source_kind = "github"
+source = "owner/mathx"
+pin_kind = "rev"
+pin = "0123456789abcdef0123456789abcdef01234567"
+resolved = "0123456789abcdef0123456789abcdef01234567"
+content_hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+cache_key = "github-owner-mathx-0123456789abcdef0123456789abcdef01234567"
+tool = "nox 0.0.4"
+"#;
+        let lockfile = Lockfile::parse(source).unwrap();
+        assert_eq!(
+            lockfile.dependencies,
+            vec![LockedDependency {
+                name: "mathx".to_string(),
+                source: DependencySource::GitHub("owner/mathx".to_string()),
+                pin: DependencyPin::Rev("0123456789abcdef0123456789abcdef01234567".to_string()),
+                resolved: "0123456789abcdef0123456789abcdef01234567".to_string(),
+                content_hash:
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string(),
+                cache_key: "github-owner-mathx-0123456789abcdef0123456789abcdef01234567"
+                    .to_string(),
+                tool: "nox 0.0.4".to_string(),
+            }]
+        );
+        assert_eq!(Lockfile::parse(&lockfile.to_source()).unwrap(), lockfile);
+    }
+
+    #[test]
+    fn validates_lockfile_against_manifest_dependencies() {
+        let manifest = Manifest::parse(
+            r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[dependencies]
+mathx = { github = "owner/mathx", rev = "0123456789abcdef0123456789abcdef01234567" }
+"#,
+            root(),
+        )
+        .unwrap();
+        let lockfile = Lockfile::parse(
+            r#"
+[lock]
+version = "1"
+
+[dependencies.mathx]
+source_kind = "github"
+source = "owner/mathx"
+pin_kind = "rev"
+pin = "fedcba9876543210fedcba9876543210fedcba98"
+resolved = "fedcba9876543210fedcba9876543210fedcba98"
+content_hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+cache_key = "github-owner-mathx-fedcba9876543210fedcba9876543210fedcba98"
+tool = "nox 0.0.4"
+"#,
+        )
+        .unwrap();
+        let diagnostics = compare_lockfile(&manifest, &lockfile);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].code, "lockfile.invalid");
+        assert!(diagnostics[0].message.contains("pin does not match"));
+    }
+
+    #[test]
+    fn rejects_invalid_lockfile_content_hash() {
+        let err = Lockfile::parse(
+            r#"
+[lock]
+version = "1"
+
+[dependencies.mathx]
+source_kind = "github"
+source = "owner/mathx"
+pin_kind = "rev"
+pin = "0123456789abcdef0123456789abcdef01234567"
+resolved = "0123456789abcdef0123456789abcdef01234567"
+content_hash = "sha256:short"
+cache_key = "cache"
+tool = "nox 0.0.4"
+"#,
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "lockfile.invalid");
+        assert!(err.message.contains("64-character SHA-256"));
     }
 
     #[test]

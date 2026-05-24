@@ -58,6 +58,7 @@ cargo run -p nox -- project check
 - `collections-config.nox`：`std/map.nox` 配置合并、删除和默认值读取。
 - `collections-summary.nox`：`std/array.nox` 与 `std/map.nox` 分组统计和排序。
 - `result-chain.nox`：`result` / `option` 的 `?` 错误传播。
+- `async.nox`：`async fn` / `await` 的最小 task 返回类型和内部 await 示例。
 - `error-summary.nox`：`std/option.nox` 与 `std/result.nox` 状态判断和 fallback。
 - `process-stdio.nox`：`std/process.nox` 的 argv、stdin、stderr 和退出码。
 - `path-summary.nox`：`std/path.nox` 的 join、normalize、basename、dirname 和 extension。
@@ -67,6 +68,8 @@ cargo run -p nox -- project check
 - `time.nox`：`std/time.nox` 的 Unix 时间格式化、解析和 duration helper。
 - `json.nox`：`std/json.nox` 的 JSON parse/stringify、kind、array/object helper。
 - `delimited-text.nox`：`std/csv.nox` 与 `std/tsv.nox` 的单行解析和格式化 helper。
+- `jsonl.nox`：`std/jsonl.nox` 的 JSON Lines 解析、格式化和 line-number 错误模型。
+- `hash.nox`：`std/hash.nox` 的 SHA-256 / HMAC-SHA256 文本和字节数组 digest helper。
 - `print.nox`：`print` 和 `to_str_int` 输出内建。
 - `stdlib.nox`：默认运行时的 `sqrt(value: float) -> float`。
 - `export-main.nox`：只导入 `export-math.nox` 的导出表面。

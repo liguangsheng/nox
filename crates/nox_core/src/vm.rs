@@ -8,7 +8,7 @@ use std::{
 use crate::{
     bytecode::{
         ArrayInstructionElement, Instruction, JsonDecodeSchema, MapInstructionEntry,
-        StringInterpolationInstructionPart,
+        StringInterpolationInstructionPart, TraitMethodDispatch,
     },
     Array, BinaryOp, BytecodeModule, Diagnostic, EnumValue, Function, FunctionKind, GcHeap,
     HostCallbackTracePhase, JsonValue, Map, MatchCaseValue, OptionValue, ProfileReport, Record,
@@ -514,10 +514,12 @@ impl Vm {
                 let value = self.heap.borrow_mut().alloc_enum(value);
                 Ok(Value::Enum(value))
             }
-            Type::Tuple(_) | Type::Function { .. } | Type::Generic(_) => Err(err(format!(
-                "{}json.from_json does not support target type {target_type}",
-                decode_path_prefix(path)
-            ))),
+            Type::Tuple(_) | Type::Function { .. } | Type::Task(_) | Type::Generic(_) => {
+                Err(err(format!(
+                    "{}json.from_json does not support target type {target_type}",
+                    decode_path_prefix(path)
+                )))
+            }
         }
     }
 
@@ -610,6 +612,7 @@ impl Vm {
                 }
                 Instruction::Function {
                     name,
+                    is_async,
                     type_params,
                     params,
                     return_type,
@@ -619,6 +622,7 @@ impl Vm {
                 } => {
                     let function = Function {
                         name: name.clone(),
+                        is_async: *is_async,
                         type_params: type_params.clone(),
                         params: params.clone(),
                         return_type: return_type.clone(),
@@ -747,6 +751,18 @@ impl Vm {
                         }
                     }
                 }
+                Instruction::Await { span } => {
+                    let value = stack.pop().ok_or_else(|| {
+                        Diagnostic::new("internal bytecode stack underflow", *span)
+                    })?;
+                    let Value::Task(task) = value else {
+                        return Err(Diagnostic::new("'await' expects task value", *span)
+                            .with_code("async.await-non-task"));
+                    };
+                    let payload = task.await_value(*span)?;
+                    self.track_heap_value(&payload, *span)?;
+                    stack.push(payload);
+                }
                 Instruction::MatchPattern { pattern, span } => {
                     let profile_start = self.operation_start();
                     let value = stack.pop().ok_or_else(|| {
@@ -766,6 +782,34 @@ impl Vm {
                         Diagnostic::new("internal bytecode stack underflow", *span)
                     })?;
                     stack.push(self.call_value(*span, callee, args)?);
+                }
+                Instruction::TraitMethodCall {
+                    method_name,
+                    dispatch,
+                    arg_count,
+                    span,
+                } => {
+                    if stack.len() < arg_count + 1 {
+                        return Err(Diagnostic::new("internal bytecode stack underflow", *span));
+                    }
+                    let args_start = stack.len() - arg_count;
+                    let args = stack.split_off(args_start);
+                    let receiver = stack.pop().ok_or_else(|| {
+                        Diagnostic::new("internal bytecode stack underflow", *span)
+                    })?;
+                    let function_name =
+                        resolve_trait_method_dispatch(method_name, dispatch, &receiver, *span)?;
+                    let callee = env.get(function_name).ok_or_else(|| {
+                        Diagnostic::new(
+                            format!("trait method '{method_name}' implementation is missing"),
+                            *span,
+                        )
+                        .with_code("trait.method-not-found")
+                    })?;
+                    let mut call_args = Vec::with_capacity(args.len() + 1);
+                    call_args.push(receiver);
+                    call_args.extend(args);
+                    stack.push(self.call_value(*span, callee, call_args)?);
                 }
                 Instruction::JsonDecode {
                     target_type,
@@ -1376,6 +1420,7 @@ impl Vm {
                 span,
             ));
         }
+        let return_type = instantiated_return_type(&function, &args);
 
         match &function.kind {
             FunctionKind::Script { body, env } => {
@@ -1397,8 +1442,13 @@ impl Vm {
                         .borrow_mut()
                         .record_call(&function.name, start.elapsed());
                 }
-                match control {
-                    Control::Value(value) | Control::Return(value) => Ok(value),
+                let value = match control {
+                    Control::Value(value) | Control::Return(value) => value,
+                };
+                if function.is_async {
+                    Ok(Value::ready_task(return_type, value))
+                } else {
+                    Ok(value)
                 }
             }
             FunctionKind::Host { callback } => {
@@ -1493,6 +1543,36 @@ impl Vm {
     }
 }
 
+fn resolve_trait_method_dispatch<'a>(
+    method_name: &str,
+    dispatch: &'a [TraitMethodDispatch],
+    receiver: &Value,
+    span: Span,
+) -> Result<&'a str, Diagnostic> {
+    let receiver_type = value_type(receiver).to_string();
+    let mut matches = dispatch
+        .iter()
+        .filter(|entry| entry.receiver_type == receiver_type)
+        .map(|entry| entry.function_name.as_str());
+    let Some(function_name) = matches.next() else {
+        return Err(Diagnostic::new(
+            format!(
+                "type '{receiver_type}' has no implementation for trait method '{method_name}'"
+            ),
+            span,
+        )
+        .with_code("trait.method-not-found"));
+    };
+    if matches.next().is_some() {
+        return Err(Diagnostic::new(
+            format!("trait method '{method_name}' is ambiguous for type '{receiver_type}'"),
+            span,
+        )
+        .with_code("trait.method-ambiguous"));
+    }
+    Ok(function_name)
+}
+
 pub(crate) fn flat_instruction_span(instruction: &Instruction) -> Span {
     match instruction {
         Instruction::Constant { span, .. }
@@ -1504,8 +1584,10 @@ pub(crate) fn flat_instruction_span(instruction: &Instruction) -> Span {
         | Instruction::Binary { span, .. }
         | Instruction::StringInterpolate { span, .. }
         | Instruction::Question { span, .. }
+        | Instruction::Await { span }
         | Instruction::MatchPattern { span, .. }
         | Instruction::Call { span, .. }
+        | Instruction::TraitMethodCall { span, .. }
         | Instruction::JsonDecode { span, .. }
         | Instruction::Array { span, .. }
         | Instruction::Tuple { span, .. }
@@ -1558,6 +1640,7 @@ pub(crate) fn value_type(value: &Value) -> Type {
             ok: Box::new(result.ok_type.clone()),
             err: Box::new(result.err_type.clone()),
         },
+        Value::Task(task) => Type::Task(Box::new(task.payload_type.clone())),
         Value::Enum(value) => Type::Enum(value.name.clone()),
         Value::Record(record) => Type::Record(record.name.clone()),
         Value::Function(function) => function.signature_type(),
@@ -1603,6 +1686,9 @@ fn bind_generic_types(
         (Type::Option(expected), Type::Option(actual)) => {
             bind_generic_types(expected, actual, type_params, bindings);
         }
+        (Type::Task(expected), Type::Task(actual)) => {
+            bind_generic_types(expected, actual, type_params, bindings);
+        }
         (
             Type::Result {
                 ok: expected_ok,
@@ -1632,6 +1718,7 @@ fn substitute_generic_type(ty: &Type, bindings: &HashMap<String, Type>) -> Type 
         ),
         Type::Map(value) => Type::Map(Box::new(substitute_generic_type(value, bindings))),
         Type::Option(value) => Type::Option(Box::new(substitute_generic_type(value, bindings))),
+        Type::Task(value) => Type::Task(Box::new(substitute_generic_type(value, bindings))),
         Type::Result { ok, err } => Type::Result {
             ok: Box::new(substitute_generic_type(ok, bindings)),
             err: Box::new(substitute_generic_type(err, bindings)),

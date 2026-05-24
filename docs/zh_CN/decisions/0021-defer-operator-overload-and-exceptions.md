@@ -1,6 +1,6 @@
 # 0021 - 暂缓运算符重载与异常模型，保持 result/option 单一错误路径
 
-- 状态：已采纳
+- 状态：已采纳；错误模型部分已由 [0028 - result / option 错误模型与 try block 暂缓](0028-result-option-error-model.md) 细化
 - 日期：2026-05-23
 - 涉及：语言 / parser / typecheck / VM / 诊断 / 工具链
 

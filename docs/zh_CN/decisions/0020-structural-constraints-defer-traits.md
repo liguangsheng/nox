@@ -1,8 +1,12 @@
 # 0020 - 暂缓 trait / interface，引入受限结构化约束
 
-- 状态：已采纳
+- 状态：已采纳；已被 [0027 - 静态 trait 系统路线](0027-static-trait-system.md) 扩展并部分取代
 - 日期：2026-05-23
 - 涉及：语言 / parser / typecheck / 工具链 / 诊断
+
+> 本 ADR 记录阶段 25 的过渡性内建 marker 约束决策。阶段 61 后，长期路线以
+> [0027 - 静态 trait 系统路线](0027-static-trait-system.md) 为准；本文中的内建 marker
+> 仍作为 v0.0.x 兼容层保留。
 
 ## 背景
 

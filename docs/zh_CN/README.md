@@ -8,6 +8,7 @@
 - [架构](architecture.md)：`nox_core` 和 `nox` 的边界、执行流水线和运行时责任。
 - [语言 v0](language-v0.md)：已经实现的语法、类型、表达式、模块和限制。
 - [CLI](cli.md)：`nox run/check/test/fmt/lsp/inspect-bytecode` 的行为、退出码和诊断格式。
+- [Cookbook](cookbook.md)：项目、CLI 脚本、数据处理、HTTP、测试和嵌入的任务配方。
 - [诊断 code](diagnostics.md)：CLI JSON 和 LSP diagnostics 的机器可读 code 契约。
 - [运行时](runtime.md)：默认标准库、权限模型、文件加载、异步任务和取消执行。
 - [标准库索引](stdlib-index.md)：按主题归类的 stdlib 模块和稳定性标签。

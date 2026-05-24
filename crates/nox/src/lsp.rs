@@ -1,7 +1,8 @@
 use std::{
-    collections::HashMap,
+    collections::{hash_map::DefaultHasher, HashMap},
     fmt::Write as _,
     fs,
+    hash::{Hash, Hasher},
     io::{self, BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
 };
@@ -9,7 +10,8 @@ use std::{
 use nox_core::{Diagnostic, HostFunctionSignature, LintWarning, Session, Span};
 
 use crate::{
-    install_lsp_stdlib, manifest::Manifest, std_module_source, Runtime, RuntimePermissions,
+    external_modules_for_manifest, install_lsp_stdlib, load_external_module, manifest::Manifest,
+    std_module_source, Runtime, RuntimePermissions,
 };
 
 pub fn run_stdio() -> io::Result<()> {
@@ -36,8 +38,18 @@ pub(crate) fn run(input: impl Read, mut output: impl Write) -> io::Result<()> {
 struct LspServer {
     documents: HashMap<String, String>,
     sessions: HashMap<String, Session>,
+    symbol_graph_cache: Option<Vec<SymbolGraphSource>>,
+    diagnostic_cache: HashMap<String, CachedDiagnostics>,
+    document_revision: u64,
+    workspace_roots: Vec<PathBuf>,
     shutdown: bool,
     exited: bool,
+}
+
+struct CachedDiagnostics {
+    revision: u64,
+    source_hash: u64,
+    response: String,
 }
 
 impl LspServer {
@@ -50,8 +62,15 @@ impl LspServer {
                 let Some(id) = json_id(message) else {
                     return Vec::new();
                 };
+                if let Some(root_uri) = json_string_field(message, "rootUri") {
+                    if let Some(root) = file_uri_path(&root_uri) {
+                        self.workspace_roots = vec![root];
+                        self.clear_symbol_graph_cache();
+                        self.clear_diagnostic_cache();
+                    }
+                }
                 vec![format!(
-                    "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"capabilities\":{{\"textDocumentSync\":1,\"hoverProvider\":true,\"definitionProvider\":true,\"documentSymbolProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{{\"triggerCharacters\":[\".\"]}},\"signatureHelpProvider\":{{\"triggerCharacters\":[\"(\",\",\"]}},\"codeActionProvider\":true,\"codeLensProvider\":{{\"resolveProvider\":false}}}}}}}}"
+                    "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"capabilities\":{{\"textDocumentSync\":1,\"hoverProvider\":true,\"definitionProvider\":true,\"renameProvider\":{{\"prepareProvider\":true}},\"documentSymbolProvider\":true,\"workspaceSymbolProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{{\"triggerCharacters\":[\".\"]}},\"signatureHelpProvider\":{{\"triggerCharacters\":[\"(\",\",\"]}},\"codeActionProvider\":true,\"codeLensProvider\":{{\"resolveProvider\":false}}}}}}}}"
                 )]
             }
             "shutdown" => {
@@ -76,6 +95,8 @@ impl LspServer {
                 };
                 self.documents.insert(uri, text);
                 self.clear_session_caches();
+                self.clear_symbol_graph_cache();
+                self.bump_document_revision();
                 self.publish_all_diagnostics()
             }
             "textDocument/didChange" => {
@@ -87,6 +108,8 @@ impl LspServer {
                 };
                 self.documents.insert(uri, text);
                 self.clear_session_caches();
+                self.clear_symbol_graph_cache();
+                self.bump_document_revision();
                 self.publish_all_diagnostics()
             }
             "textDocument/hover" => {
@@ -115,6 +138,13 @@ impl LspServer {
                 };
                 vec![self.document_symbol_response(&id, &uri)]
             }
+            "workspace/symbol" => {
+                let Some(id) = json_id(message) else {
+                    return Vec::new();
+                };
+                let query = json_string_field(message, "query").unwrap_or_default();
+                vec![self.workspace_symbol_response(&id, &query)]
+            }
             "textDocument/codeLens" => {
                 let (Some(id), Some(uri)) = (json_id(message), json_string_field(message, "uri"))
                 else {
@@ -139,6 +169,29 @@ impl LspServer {
                     return Vec::new();
                 };
                 vec![self.definition_response(&id, &uri, line, character)]
+            }
+            "textDocument/prepareRename" => {
+                let (Some(id), Some(uri), Some(line), Some(character)) = (
+                    json_id(message),
+                    json_string_field(message, "uri"),
+                    json_number_field(message, "line"),
+                    json_number_field(message, "character"),
+                ) else {
+                    return Vec::new();
+                };
+                vec![self.prepare_rename_response(&id, &uri, line, character)]
+            }
+            "textDocument/rename" => {
+                let (Some(id), Some(uri), Some(line), Some(character), Some(new_name)) = (
+                    json_id(message),
+                    json_string_field(message, "uri"),
+                    json_number_field(message, "line"),
+                    json_number_field(message, "character"),
+                    json_string_field(message, "newName"),
+                ) else {
+                    return Vec::new();
+                };
+                vec![self.rename_response(&id, &uri, line, character, &new_name)]
             }
             "textDocument/completion" => {
                 let (Some(id), Some(uri), Some(line), Some(character)) = (
@@ -179,6 +232,18 @@ impl LspServer {
         }
     }
 
+    fn clear_symbol_graph_cache(&mut self) {
+        self.symbol_graph_cache = None;
+    }
+
+    fn clear_diagnostic_cache(&mut self) {
+        self.diagnostic_cache.clear();
+    }
+
+    fn bump_document_revision(&mut self) {
+        self.document_revision = self.document_revision.saturating_add(1);
+    }
+
     fn publish_all_diagnostics(&mut self) -> Vec<String> {
         let documents = self
             .documents
@@ -187,8 +252,27 @@ impl LspServer {
             .collect::<Vec<_>>();
         documents
             .into_iter()
-            .map(|(uri, text)| self.publish_diagnostics(&uri, &text))
+            .map(|(uri, text)| self.publish_diagnostics_cached(&uri, &text))
             .collect()
+    }
+
+    fn publish_diagnostics_cached(&mut self, uri: &str, source: &str) -> String {
+        let source_hash = stable_hash(source);
+        if let Some(cached) = self.diagnostic_cache.get(uri) {
+            if cached.revision == self.document_revision && cached.source_hash == source_hash {
+                return cached.response.clone();
+            }
+        }
+        let response = self.publish_diagnostics(uri, source);
+        self.diagnostic_cache.insert(
+            uri.to_string(),
+            CachedDiagnostics {
+                revision: self.document_revision,
+                source_hash,
+                response: response.clone(),
+            },
+        );
+        response
     }
 
     fn formatting_response(&self, id: &str, uri: &str) -> String {
@@ -272,6 +356,36 @@ impl LspServer {
         format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":[{symbols}]}}")
     }
 
+    fn workspace_symbol_response(&mut self, id: &str, query: &str) -> String {
+        let query = query.to_ascii_lowercase();
+        let symbols = self
+            .symbol_graph_sources()
+            .iter()
+            .flat_map(|entry| {
+                entry
+                    .symbols
+                    .iter()
+                    .filter(|symbol| matches!(symbol.kind, 5 | 10 | 11 | 12 | 23))
+                    .map(move |symbol| (&entry.uri, &entry.source, symbol))
+            })
+            .filter(|(_, _, symbol)| {
+                query.is_empty() || symbol.name.to_ascii_lowercase().contains(&query)
+            })
+            .map(|(uri, source, symbol)| {
+                let (line, character) = line_character(source, symbol.offset);
+                let end_character = character + symbol.name.len();
+                format!(
+                    "{{\"name\":\"{}\",\"kind\":{},\"location\":{{\"uri\":\"{}\",\"range\":{{\"start\":{{\"line\":{line},\"character\":{character}}},\"end\":{{\"line\":{line},\"character\":{end_character}}}}}}}}}",
+                    json_escape(&symbol.name),
+                    symbol.kind,
+                    json_escape(uri)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":[{symbols}]}}")
+    }
+
     fn definition_response(&self, id: &str, uri: &str, line: usize, character: usize) -> String {
         let Some(source) = self.documents.get(uri) else {
             return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
@@ -279,21 +393,121 @@ impl LspServer {
         let Some(offset) = byte_offset(source, line, character) else {
             return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
         };
-        let Some(identifier) = identifier_at(source, offset) else {
+        let Some((identifier_start, _, identifier)) = identifier_bounds_at(source, offset) else {
             return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
         };
+        let Some(base) = file_uri_base(uri) else {
+            return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
+        };
+        if let Some(alias) = namespace_member_alias_at(source, identifier_start) {
+            if let Some(specifier) = namespace_import_specifier(source, &alias) {
+                if let Some((target_uri, target_source)) =
+                    self.resolve_module_location(&base, &specifier)
+                {
+                    if let Some(symbol) = module_surface_symbol(&target_source, &identifier) {
+                        return definition_location_response(
+                            id,
+                            &target_uri,
+                            &target_source,
+                            &symbol,
+                        );
+                    }
+                }
+            }
+            return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
+        }
         let Some(symbol) = top_level_symbols(source)
             .into_iter()
             .find(|symbol| symbol.name == identifier)
         else {
+            for specifier in direct_import_specifiers(source) {
+                if let Some((target_uri, target_source)) =
+                    self.resolve_module_location(&base, &specifier)
+                {
+                    if let Some(symbol) = module_surface_symbol(&target_source, &identifier) {
+                        return definition_location_response(
+                            id,
+                            &target_uri,
+                            &target_source,
+                            &symbol,
+                        );
+                    }
+                }
+            }
+            return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
+        };
+        definition_location_response(id, uri, source, &symbol)
+    }
+
+    fn prepare_rename_response(
+        &self,
+        id: &str,
+        uri: &str,
+        line: usize,
+        character: usize,
+    ) -> String {
+        let Some((source, symbol)) = self.current_file_rename_symbol(uri, line, character) else {
             return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
         };
         let (line, character) = line_character(source, symbol.offset);
         let end_character = character + symbol.name.len();
         format!(
-            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"uri\":\"{}\",\"range\":{{\"start\":{{\"line\":{line},\"character\":{character}}},\"end\":{{\"line\":{line},\"character\":{end_character}}}}}}}}}",
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"range\":{{\"start\":{{\"line\":{line},\"character\":{character}}},\"end\":{{\"line\":{line},\"character\":{end_character}}}}},\"placeholder\":\"{}\"}}}}",
+            json_escape(&symbol.name)
+        )
+    }
+
+    fn rename_response(
+        &self,
+        id: &str,
+        uri: &str,
+        line: usize,
+        character: usize,
+        new_name: &str,
+    ) -> String {
+        if !is_valid_identifier(new_name) {
+            return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
+        }
+        let Some((source, symbol)) = self.current_file_rename_symbol(uri, line, character) else {
+            return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
+        };
+        let edits = rename_identifier_ranges(source, &symbol.name)
+            .into_iter()
+            .map(|(start, end)| {
+                let (start_line, start_character) = line_character(source, start);
+                let (end_line, end_character) = line_character(source, end);
+                format!(
+                    "{{\"range\":{{\"start\":{{\"line\":{start_line},\"character\":{start_character}}},\"end\":{{\"line\":{end_line},\"character\":{end_character}}}}},\"newText\":\"{}\"}}",
+                    json_escape(new_name)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"changes\":{{\"{}\": [{edits}]}}}}}}",
             json_escape(uri)
         )
+    }
+
+    fn current_file_rename_symbol(
+        &self,
+        uri: &str,
+        line: usize,
+        character: usize,
+    ) -> Option<(&str, TopLevelSymbol)> {
+        let source = self.documents.get(uri)?;
+        let offset = byte_offset(source, line, character)?;
+        let (identifier_start, _, identifier) = identifier_bounds_at(source, offset)?;
+        if namespace_member_alias_at(source, identifier_start).is_some() {
+            return None;
+        }
+        let symbol = top_level_symbols(source)
+            .into_iter()
+            .find(|symbol| symbol.name == identifier)?;
+        if has_unsafe_rename_shadow(source, &symbol) {
+            return None;
+        }
+        Some((source, symbol))
     }
 
     fn completion_response(
@@ -310,9 +524,24 @@ impl LspServer {
             return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":[]}}");
         };
         let prefix_source = &source[..offset];
-        if let Some(alias) = namespace_completion_alias(prefix_source) {
+        if let Some(prefix) = import_completion_prefix(prefix_source) {
             let items = self
-                .namespace_completion_members(uri, &source, &alias)
+                .import_completion_specifiers(uri, &prefix)
+                .into_iter()
+                .map(|specifier| completion_item(&specifier, 9))
+                .collect::<Vec<_>>();
+            return format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":[{}]}}",
+                items.join(",")
+            );
+        }
+        if let Some(receiver) = namespace_completion_alias(prefix_source) {
+            let members = if namespace_import_specifier(&source, &receiver).is_some() {
+                self.namespace_completion_members(uri, &source, &receiver)
+            } else {
+                receiver_member_completion_members(&source, &receiver)
+            };
+            let items = members
                 .into_iter()
                 .map(|member| completion_item(&member, 6))
                 .collect::<Vec<_>>();
@@ -323,8 +552,8 @@ impl LspServer {
         }
         let mut items = Vec::new();
         for keyword in [
-            "let", "fn", "return", "if", "else", "while", "for", "in", "break", "continue",
-            "import", "export", "record", "true", "false", "null",
+            "let", "fn", "async", "await", "return", "if", "else", "while", "for", "in", "break",
+            "continue", "import", "export", "record", "true", "false", "null",
         ] {
             items.push(completion_item(keyword, 14));
         }
@@ -365,6 +594,11 @@ impl LspServer {
             ));
         }
         let mut seen = std::collections::HashSet::new();
+        for (name, kind) in self.project_top_level_completion_symbols(uri) {
+            if seen.insert(name.clone()) {
+                items.push(completion_item(&name, kind));
+            }
+        }
         for identifier in collect_identifiers(prefix_source) {
             if seen.insert(identifier.clone()) {
                 items.push(completion_item(&identifier, 6));
@@ -374,6 +608,83 @@ impl LspServer {
             "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":[{}]}}",
             items.join(",")
         )
+    }
+
+    fn import_completion_specifiers(&self, uri: &str, prefix: &str) -> Vec<String> {
+        let mut seen = std::collections::HashSet::new();
+        let mut specifiers = Vec::new();
+        for specifier in std_module_specifiers() {
+            if specifier.starts_with(prefix) && seen.insert(specifier.to_string()) {
+                specifiers.push(specifier.to_string());
+            }
+        }
+        let Some(base) = file_uri_base(uri) else {
+            return specifiers;
+        };
+        let overlay = self.documents_overlay();
+        for root in manifest_search_paths(&base) {
+            let mut files = Vec::new();
+            collect_nox_files(&root, &mut files);
+            for path in files {
+                let specifier = match path.strip_prefix(&root) {
+                    Ok(relative) => relative.to_string_lossy().replace('\\', "/"),
+                    Err(_) => continue,
+                };
+                if specifier.starts_with(prefix) && seen.insert(specifier.clone()) {
+                    specifiers.push(specifier);
+                }
+            }
+        }
+        for path in overlay.keys() {
+            if path.extension().is_some_and(|extension| extension == "nox") {
+                let specifier = path
+                    .strip_prefix(&base)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if !specifier.starts_with("..")
+                    && specifier.starts_with(prefix)
+                    && seen.insert(specifier.clone())
+                {
+                    specifiers.push(specifier);
+                }
+            }
+        }
+        specifiers.sort();
+        specifiers
+    }
+
+    fn project_top_level_completion_symbols(&mut self, uri: &str) -> Vec<(String, u8)> {
+        let Some(base) = file_uri_base(uri) else {
+            return Vec::new();
+        };
+        let mut roots = manifest_search_paths(&base);
+        if roots.is_empty() {
+            roots.extend(self.workspace_roots.iter().cloned());
+        }
+        if roots.is_empty() {
+            return Vec::new();
+        }
+
+        let mut symbols = Vec::new();
+        for entry in self.symbol_graph_sources() {
+            let Some(path) = file_uri_path(&entry.uri) else {
+                continue;
+            };
+            if !roots.iter().any(|root| path.starts_with(root)) {
+                continue;
+            }
+            for symbol in &entry.symbols {
+                if matches!(symbol.kind, 5 | 10 | 11 | 12 | 23) {
+                    symbols.push((
+                        symbol.name.clone(),
+                        completion_kind_for_symbol_kind(symbol.kind),
+                    ));
+                }
+            }
+        }
+        symbols.sort_by(|left, right| left.0.cmp(&right.0));
+        symbols
     }
 
     fn namespace_completion_members(&self, uri: &str, source: &str, alias: &str) -> Vec<String> {
@@ -400,9 +711,21 @@ impl LspServer {
             return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
         };
         let identifier = identifier_at(&source, offset);
+        if let Some(value) = identifier
+            .as_deref()
+            .and_then(|alias| self.module_hover_value(uri, &source, alias))
+        {
+            return format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"contents\":{{\"kind\":\"plaintext\",\"value\":\"{}\"}}}}}}",
+                json_escape(&value)
+            );
+        }
         let doc_comment = identifier
             .as_deref()
             .and_then(|name| doc_comment_for_top_level(&source, name));
+        let source_signature = identifier
+            .as_deref()
+            .and_then(|name| function_signature(&source, name));
         let host_signature = identifier
             .as_deref()
             .and_then(|name| self.host_function_signature(uri, name));
@@ -420,6 +743,10 @@ impl LspServer {
         match result {
             Ok(Some(ty)) => {
                 let mut value = ty.to_string();
+                if let Some(signature) = source_signature.as_ref() {
+                    value.push_str("\n\n");
+                    value.push_str(&signature.label);
+                }
                 if let Some(doc) = doc_comment {
                     value.push_str("\n\n");
                     value.push_str(&doc);
@@ -459,6 +786,23 @@ impl LspServer {
                 None => format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}"),
             },
         }
+    }
+
+    fn module_hover_value(&self, uri: &str, source: &str, alias: &str) -> Option<String> {
+        let specifier = namespace_import_specifier(source, alias)?;
+        let base = file_uri_base(uri)?;
+        let module_source = if let Ok(Some(source)) = std_module_source(&specifier) {
+            source.to_string()
+        } else {
+            self.resolve_module_source(&base, &specifier)?
+        };
+        let exports = module_surface_members(&module_source);
+        let export_text = if exports.is_empty() {
+            "(none)".to_string()
+        } else {
+            exports.join(", ")
+        };
+        Some(format!("module {specifier}\n\nexports: {export_text}"))
     }
 
     fn signature_help_response(
@@ -563,6 +907,60 @@ impl LspServer {
         overlay
     }
 
+    fn symbol_graph_sources(&mut self) -> &[SymbolGraphSource] {
+        if self.symbol_graph_cache.is_none() {
+            self.symbol_graph_cache = Some(self.build_symbol_graph_sources());
+        }
+        self.symbol_graph_cache.as_deref().unwrap_or(&[])
+    }
+
+    fn build_symbol_graph_sources(&self) -> Vec<SymbolGraphSource> {
+        let overlay = self.documents_overlay();
+        let mut seen = std::collections::HashSet::new();
+        let mut sources = Vec::new();
+
+        for (uri, text) in &self.documents {
+            if seen.insert(uri.clone()) {
+                sources.push(SymbolGraphSource::new(uri.clone(), text.clone()));
+            }
+        }
+
+        for uri in self.documents.keys() {
+            let Some(base) = file_uri_base(uri) else {
+                continue;
+            };
+            for root in manifest_search_paths(&base) {
+                for path in workspace_nox_files(&root) {
+                    let uri = path_to_file_uri(&path);
+                    if !seen.insert(uri.clone()) {
+                        continue;
+                    }
+                    if let Some(source) = overlay.get(&path).cloned() {
+                        sources.push(SymbolGraphSource::new(uri, source));
+                    } else if let Ok(source) = fs::read_to_string(&path) {
+                        sources.push(SymbolGraphSource::new(uri, source));
+                    }
+                }
+            }
+        }
+
+        for root in &self.workspace_roots {
+            for path in workspace_nox_files(root) {
+                let uri = path_to_file_uri(&path);
+                if !seen.insert(uri.clone()) {
+                    continue;
+                }
+                if let Some(source) = overlay.get(&path).cloned() {
+                    sources.push(SymbolGraphSource::new(uri, source));
+                } else if let Ok(source) = fs::read_to_string(&path) {
+                    sources.push(SymbolGraphSource::new(uri, source));
+                }
+            }
+        }
+
+        sources
+    }
+
     fn resolve_module_source(&self, base: &Path, specifier: &str) -> Option<String> {
         if let Ok(Some(source)) = std_module_source(specifier) {
             return Some(source.to_string());
@@ -582,6 +980,38 @@ impl LspServer {
             }
             if candidate.is_file() {
                 return fs::read_to_string(candidate).ok();
+            }
+        }
+        let external_modules = external_modules_for_base(base).ok()?;
+        if let Ok(Some(source)) = load_external_module(specifier, &external_modules) {
+            return Some(source);
+        }
+        None
+    }
+
+    fn resolve_module_location(&self, base: &Path, specifier: &str) -> Option<(String, String)> {
+        if matches!(std_module_source(specifier), Ok(Some(_))) {
+            return None;
+        }
+        let overlay = self.documents_overlay();
+        let primary = base.join(specifier);
+        if let Some(source) = overlay.get(&primary) {
+            return Some((path_to_file_uri(&primary), source.clone()));
+        }
+        if primary.is_file() {
+            return fs::read_to_string(&primary)
+                .ok()
+                .map(|source| (path_to_file_uri(&primary), source));
+        }
+        for search in manifest_search_paths(base) {
+            let candidate = search.join(specifier);
+            if let Some(source) = overlay.get(&candidate) {
+                return Some((path_to_file_uri(&candidate), source.clone()));
+            }
+            if candidate.is_file() {
+                return fs::read_to_string(&candidate)
+                    .ok()
+                    .map(|source| (path_to_file_uri(&candidate), source));
             }
         }
         None
@@ -654,14 +1084,24 @@ fn doc_comment_for_top_level(source: &str, name: &str) -> Option<String> {
     None
 }
 
+fn stable_hash(value: impl Hash) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    value.hash(&mut hasher);
+    hasher.finish()
+}
+
 fn declaration_matches(trimmed: &str, name: &str) -> bool {
     let pattern_pairs = [
         ("export fn ", "("),
+        ("export async fn ", "("),
         ("fn ", "("),
+        ("async fn ", "("),
         ("export record ", " {"),
         ("record ", " {"),
         ("export enum ", " {"),
         ("enum ", " {"),
+        ("export trait ", " {"),
+        ("trait ", " {"),
         ("export type ", " "),
         ("type ", " "),
         ("export let ", ""),
@@ -714,6 +1154,7 @@ fn lint_warning_json(warning: &LintWarning, source: &str) -> String {
 
 fn check_session_loader(session: &mut Session, base: PathBuf, overlay: HashMap<PathBuf, String>) {
     let search_paths = manifest_search_paths(&base);
+    let external_modules = external_modules_for_base(&base).unwrap_or_default();
     session.set_module_loader(move |specifier| {
         if let Some(source) = std_module_source(specifier)? {
             return Ok(source.to_string());
@@ -734,6 +1175,9 @@ fn check_session_loader(session: &mut Session, base: PathBuf, overlay: HashMap<P
                 return read_module(&candidate);
             }
         }
+        if let Some(source) = load_external_module(specifier, &external_modules)? {
+            return Ok(source);
+        }
         read_module(&primary)
     });
 }
@@ -743,6 +1187,43 @@ fn manifest_search_paths(base: &Path) -> Vec<PathBuf> {
     match Manifest::discover(&probe) {
         Ok(Some(manifest)) => manifest.source_dirs(),
         _ => Vec::new(),
+    }
+}
+
+fn external_modules_for_base(
+    base: &Path,
+) -> Result<Vec<crate::ExternalModuleDependency>, Diagnostic> {
+    let probe = base.join("probe.nox");
+    match Manifest::discover(&probe)? {
+        Some(manifest) => external_modules_for_manifest(&manifest),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn workspace_nox_files(root: &Path) -> Vec<PathBuf> {
+    let roots = match Manifest::discover(&root.join("probe.nox")) {
+        Ok(Some(manifest)) => manifest.source_dirs(),
+        _ => vec![root.to_path_buf()],
+    };
+    let mut files = Vec::new();
+    for root in roots {
+        collect_nox_files(&root, &mut files);
+    }
+    files.sort();
+    files
+}
+
+fn collect_nox_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_nox_files(&path, files);
+        } else if path.extension().is_some_and(|extension| extension == "nox") {
+            files.push(path);
+        }
     }
 }
 
@@ -779,6 +1260,17 @@ fn completion_item_with_detail(
         json_escape(label),
         json_escape(detail)
     )
+}
+
+fn completion_kind_for_symbol_kind(symbol_kind: u8) -> u8 {
+    match symbol_kind {
+        12 => 3,  // function
+        10 => 13, // enum
+        11 => 8,  // interface/trait
+        23 => 7,  // struct/record
+        5 => 25,  // type parameter/type alias
+        _ => 6,
+    }
 }
 
 fn host_signature_label(signature: &HostFunctionSignature) -> String {
@@ -837,6 +1329,55 @@ fn collect_identifiers(source: &str) -> Vec<String> {
     identifiers
 }
 
+fn import_completion_prefix(source: &str) -> Option<String> {
+    let line_start = source.rfind('\n').map(|index| index + 1).unwrap_or(0);
+    let line = &source[line_start..];
+    let trimmed = line.trim_start();
+    if !trimmed.starts_with("import") {
+        return None;
+    }
+    let mut rest = &trimmed["import".len()..];
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    rest = rest.trim_start();
+    let rest = rest.strip_prefix('"')?;
+    if rest.contains('"') {
+        return None;
+    }
+    Some(rest.to_string())
+}
+
+fn std_module_specifiers() -> &'static [&'static str] {
+    &[
+        "std/array.nox",
+        "std/bytes.nox",
+        "std/csv.nox",
+        "std/dotenv.nox",
+        "std/encoding.nox",
+        "std/env.nox",
+        "std/fs.nox",
+        "std/hash.nox",
+        "std/http.nox",
+        "std/ini.nox",
+        "std/json.nox",
+        "std/jsonl.nox",
+        "std/map.nox",
+        "std/option.nox",
+        "std/path.nox",
+        "std/process.nox",
+        "std/random.nox",
+        "std/result.nox",
+        "std/string.nox",
+        "std/task.nox",
+        "std/term.nox",
+        "std/time.nox",
+        "std/toml.nox",
+        "std/tsv.nox",
+        "std/url.nox",
+    ]
+}
+
 fn namespace_completion_alias(source: &str) -> Option<String> {
     let bytes = source.as_bytes();
     let mut index = bytes.len();
@@ -867,51 +1408,30 @@ fn namespace_import_specifier(source: &str, alias: &str) -> Option<String> {
     None
 }
 
-fn module_surface_members(source: &str) -> Vec<String> {
+fn direct_import_specifiers(source: &str) -> Vec<String> {
     let tokens = lexical_tokens(source);
-    let mut declarations = Vec::new();
-    let mut has_exports = false;
+    let mut specifiers = Vec::new();
     let mut index = 0;
-    let mut depth = 0usize;
-    while index < tokens.len() {
-        if tokens[index] == "{" {
-            depth += 1;
-            index += 1;
-            continue;
-        }
-        if tokens[index] == "}" {
-            depth = depth.saturating_sub(1);
-            index += 1;
-            continue;
-        }
-        if depth != 0 {
-            index += 1;
-            continue;
-        }
-        let mut exported = false;
-        if tokens[index] == "export" {
-            exported = true;
-            has_exports = true;
-            index += 1;
-        }
-        if index + 1 < tokens.len()
-            && matches!(tokens[index].as_str(), "fn" | "let" | "const" | "record")
-        {
-            declarations.push((tokens[index + 1].clone(), exported));
-            index += 2;
+    while index + 1 < tokens.len() {
+        if tokens[index] == "import" {
+            let specifier = tokens[index + 1].clone();
+            if tokens.get(index + 2).is_some_and(|token| token == "as") {
+                index += 4;
+            } else {
+                specifiers.push(specifier);
+                index += 2;
+            }
             continue;
         }
         index += 1;
     }
-    declarations
+    specifiers
+}
+
+fn module_surface_members(source: &str) -> Vec<String> {
+    module_surface_symbols(source)
         .into_iter()
-        .filter_map(|(name, exported)| {
-            if !has_exports || exported {
-                Some(name)
-            } else {
-                None
-            }
-        })
+        .map(|symbol| symbol.name)
         .collect()
 }
 
@@ -925,10 +1445,43 @@ struct FunctionSignature {
     parameters: Vec<String>,
 }
 
+struct SymbolGraphSource {
+    uri: String,
+    source: String,
+    symbols: Vec<TopLevelSymbol>,
+}
+
+impl SymbolGraphSource {
+    fn new(uri: String, source: String) -> Self {
+        let symbols = top_level_symbols(&source);
+        Self {
+            uri,
+            source,
+            symbols,
+        }
+    }
+}
+
+#[derive(Clone)]
 struct TopLevelSymbol {
     name: String,
     kind: u8,
     offset: usize,
+    exported: bool,
+}
+
+fn definition_location_response(
+    id: &str,
+    uri: &str,
+    source: &str,
+    symbol: &TopLevelSymbol,
+) -> String {
+    let (line, character) = line_character(source, symbol.offset);
+    let end_character = character + symbol.name.len();
+    format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"uri\":\"{}\",\"range\":{{\"start\":{{\"line\":{line},\"character\":{character}}},\"end\":{{\"line\":{line},\"character\":{end_character}}}}}}}}}",
+        json_escape(uri)
+    )
 }
 
 fn active_call(source: &str, offset: usize) -> Option<ActiveCall> {
@@ -956,7 +1509,9 @@ fn active_call(source: &str, offset: usize) -> Option<ActiveCall> {
 
 fn function_signature(source: &str, name: &str) -> Option<FunctionSignature> {
     let needle = format!("fn {name}(");
-    let start = source.find(&needle)? + "fn ".len();
+    let needle_start = source.find(&needle)?;
+    let is_async = source[..needle_start].trim_end().ends_with("async");
+    let start = needle_start + "fn ".len();
     let rest = &source[start..];
     let open = rest.find('(')?;
     let close = rest[open + 1..].find(')')? + open + 1;
@@ -983,10 +1538,132 @@ fn function_signature(source: &str, name: &str) -> Option<FunctionSignature> {
             .map(|param| param.trim().to_string())
             .collect()
     };
-    Some(FunctionSignature {
-        label: format!("fn {name}({params}) -> {return_type}"),
-        parameters,
-    })
+    let label = if is_async {
+        format!("async fn {name}({params}) -> {return_type} (task[{return_type}])")
+    } else {
+        format!("fn {name}({params}) -> {return_type}")
+    };
+    Some(FunctionSignature { label, parameters })
+}
+
+fn receiver_member_completion_members(source: &str, receiver: &str) -> Vec<String> {
+    let Some(receiver_type) = binding_type(source, receiver) else {
+        return Vec::new();
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut members = Vec::new();
+    for (name, params) in function_declarations(source) {
+        if first_param_matches_receiver(&params, &receiver_type) && seen.insert(name.clone()) {
+            members.push(name);
+        }
+    }
+    for name in impl_method_names_for_type(source, &receiver_type) {
+        if seen.insert(name.clone()) {
+            members.push(name);
+        }
+    }
+    members.sort();
+    members
+}
+
+fn binding_type(source: &str, name: &str) -> Option<String> {
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed
+            .strip_prefix("let ")
+            .or_else(|| trimmed.strip_prefix("const "))
+            .or_else(|| trimmed.strip_prefix("export let "))
+            .or_else(|| trimmed.strip_prefix("export const "))
+        else {
+            continue;
+        };
+        let rest = rest.trim_start();
+        let Some(after_name) = rest.strip_prefix(name) else {
+            continue;
+        };
+        let after_name = after_name.trim_start();
+        let Some(after_colon) = after_name.strip_prefix(':') else {
+            continue;
+        };
+        let after_colon = after_colon.trim_start();
+        let ty = after_colon
+            .split(|c: char| c == '=' || c == ';' || c.is_whitespace())
+            .next()
+            .unwrap_or("")
+            .trim();
+        if !ty.is_empty() {
+            return Some(ty.to_string());
+        }
+    }
+    None
+}
+
+fn function_declarations(source: &str) -> Vec<(String, String)> {
+    let mut declarations = Vec::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let rest = trimmed
+            .strip_prefix("fn ")
+            .or_else(|| trimmed.strip_prefix("export fn "))
+            .or_else(|| trimmed.strip_prefix("async fn "))
+            .or_else(|| trimmed.strip_prefix("export async fn "));
+        let Some(rest) = rest else {
+            continue;
+        };
+        let Some(open) = rest.find('(') else {
+            continue;
+        };
+        let Some(close) = rest[open + 1..].find(')') else {
+            continue;
+        };
+        let name = rest[..open].trim();
+        if name.is_empty() {
+            continue;
+        }
+        declarations.push((
+            name.to_string(),
+            rest[open + 1..open + 1 + close].to_string(),
+        ));
+    }
+    declarations
+}
+
+fn first_param_matches_receiver(params: &str, receiver_type: &str) -> bool {
+    let Some(first) = params.split(',').next() else {
+        return false;
+    };
+    let Some((_, ty)) = first.split_once(':') else {
+        return false;
+    };
+    ty.trim() == receiver_type
+}
+
+fn impl_method_names_for_type(source: &str, receiver_type: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut lines = source.lines();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim_start();
+        if !(trimmed.starts_with("impl ") && trimmed.contains(&format!(" for {receiver_type}"))) {
+            continue;
+        }
+        for body_line in lines.by_ref() {
+            let body = body_line.trim_start();
+            if body.starts_with('}') {
+                break;
+            }
+            let Some(rest) = body.strip_prefix("fn ") else {
+                continue;
+            };
+            let Some(open) = rest.find('(') else {
+                continue;
+            };
+            let name = rest[..open].trim();
+            if !name.is_empty() {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
 }
 
 fn top_level_symbols(source: &str) -> Vec<TopLevelSymbol> {
@@ -1029,7 +1706,17 @@ fn top_level_symbols(source: &str) -> Vec<TopLevelSymbol> {
                     index += 1;
                 }
                 let mut keyword = &source[keyword_start..index];
+                let mut exported = false;
                 if keyword == "export" {
+                    exported = true;
+                    index = skip_ws(source, index);
+                    let next_start = index;
+                    while index < bytes.len() && is_identifier_continue(bytes[index]) {
+                        index += 1;
+                    }
+                    keyword = &source[next_start..index];
+                }
+                if keyword == "async" {
                     index = skip_ws(source, index);
                     let next_start = index;
                     while index < bytes.len() && is_identifier_continue(bytes[index]) {
@@ -1041,6 +1728,7 @@ fn top_level_symbols(source: &str) -> Vec<TopLevelSymbol> {
                     "fn" => Some(12),
                     "record" => Some(23),
                     "enum" => Some(10),
+                    "trait" => Some(11),
                     "type" => Some(5),
                     "let" | "const" => Some(13),
                     _ => None,
@@ -1057,6 +1745,7 @@ fn top_level_symbols(source: &str) -> Vec<TopLevelSymbol> {
                             name: source[name_start..index].to_string(),
                             kind,
                             offset: name_start,
+                            exported,
                         });
                     }
                 }
@@ -1065,6 +1754,21 @@ fn top_level_symbols(source: &str) -> Vec<TopLevelSymbol> {
         }
     }
     symbols
+}
+
+fn module_surface_symbols(source: &str) -> Vec<TopLevelSymbol> {
+    let symbols = top_level_symbols(source);
+    let has_exports = symbols.iter().any(|symbol| symbol.exported);
+    symbols
+        .into_iter()
+        .filter(|symbol| !has_exports || symbol.exported)
+        .collect()
+}
+
+fn module_surface_symbol(source: &str, name: &str) -> Option<TopLevelSymbol> {
+    module_surface_symbols(source)
+        .into_iter()
+        .find(|symbol| symbol.name == name)
 }
 
 fn skip_ws(source: &str, mut index: usize) -> usize {
@@ -1076,6 +1780,10 @@ fn skip_ws(source: &str, mut index: usize) -> usize {
 }
 
 fn identifier_at(source: &str, offset: usize) -> Option<String> {
+    identifier_bounds_at(source, offset).map(|(_, _, identifier)| identifier)
+}
+
+fn identifier_bounds_at(source: &str, offset: usize) -> Option<(usize, usize, String)> {
     let bytes = source.as_bytes();
     if offset > bytes.len() {
         return None;
@@ -1097,7 +1805,26 @@ fn identifier_at(source: &str, offset: usize) -> Option<String> {
     while end < bytes.len() && is_identifier_continue(bytes[end]) {
         end += 1;
     }
-    Some(source[start..end].to_string())
+    Some((start, end, source[start..end].to_string()))
+}
+
+fn namespace_member_alias_at(source: &str, identifier_start: usize) -> Option<String> {
+    let bytes = source.as_bytes();
+    if identifier_start == 0 {
+        return None;
+    }
+    let dot = identifier_start - 1;
+    if bytes.get(dot) != Some(&b'.') {
+        return None;
+    }
+    let mut alias_start = dot;
+    while alias_start > 0 && is_identifier_continue(bytes[alias_start - 1]) {
+        alias_start -= 1;
+    }
+    if alias_start == dot || !is_identifier_start(bytes[alias_start]) {
+        return None;
+    }
+    Some(source[alias_start..dot].to_string())
 }
 
 fn lexical_tokens(source: &str) -> Vec<String> {
@@ -1164,6 +1891,119 @@ fn is_identifier_continue(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || byte == b'_'
 }
 
+fn is_valid_identifier(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    !bytes.is_empty()
+        && is_identifier_start(bytes[0])
+        && bytes[1..].iter().copied().all(is_identifier_continue)
+}
+
+fn has_unsafe_rename_shadow(source: &str, symbol: &TopLevelSymbol) -> bool {
+    top_level_symbols(source)
+        .into_iter()
+        .any(|candidate| candidate.name == symbol.name && candidate.offset != symbol.offset)
+        || nested_declaration_names(source)
+            .into_iter()
+            .any(|name| name == symbol.name)
+        || parameter_names(source)
+            .into_iter()
+            .any(|name| name == symbol.name)
+}
+
+fn nested_declaration_names(source: &str) -> Vec<String> {
+    let tokens = lexical_tokens(source);
+    let mut names = Vec::new();
+    let mut index = 0;
+    let mut depth = 0usize;
+    while index < tokens.len() {
+        match tokens[index].as_str() {
+            "{" => depth += 1,
+            "}" => depth = depth.saturating_sub(1),
+            "fn" | "let" | "const" if depth > 0 && index + 1 < tokens.len() => {
+                names.push(tokens[index + 1].clone());
+                index += 1;
+            }
+            _ => {}
+        }
+        index += 1;
+    }
+    names
+}
+
+fn parameter_names(source: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for symbol in top_level_symbols(source)
+        .into_iter()
+        .filter(|symbol| symbol.kind == 12)
+    {
+        let Some(open) = source[symbol.offset + symbol.name.len()..].find('(') else {
+            continue;
+        };
+        let params_start = symbol.offset + symbol.name.len() + open + 1;
+        let Some(close) = source[params_start..].find(')') else {
+            continue;
+        };
+        let params = &source[params_start..params_start + close];
+        for param in params.split(',') {
+            let Some((name, _)) = param.trim().split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            if is_valid_identifier(name) {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn rename_identifier_ranges(source: &str, name: &str) -> Vec<(usize, usize)> {
+    identifier_ranges(source, name)
+        .into_iter()
+        .filter(|(start, _)| namespace_member_alias_at(source, *start).is_none())
+        .collect()
+}
+
+fn identifier_ranges(source: &str, name: &str) -> Vec<(usize, usize)> {
+    let bytes = source.as_bytes();
+    let mut ranges = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' && index + 1 < bytes.len() {
+                        index += 2;
+                    } else if bytes[index] == b'"' {
+                        index += 1;
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            b'/' if index + 1 < bytes.len() && bytes[index + 1] == b'/' => {
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            byte if is_identifier_start(byte) => {
+                let start = index;
+                index += 1;
+                while index < bytes.len() && is_identifier_continue(bytes[index]) {
+                    index += 1;
+                }
+                if &source[start..index] == name {
+                    ranges.push((start, index));
+                }
+            }
+            _ => index += 1,
+        }
+    }
+    ranges
+}
+
 fn file_uri_base(uri: &str) -> Option<PathBuf> {
     let path = uri.strip_prefix("file://")?;
     Path::new(path).parent().map(Path::to_path_buf)
@@ -1171,6 +2011,10 @@ fn file_uri_base(uri: &str) -> Option<PathBuf> {
 
 fn file_uri_path(uri: &str) -> Option<PathBuf> {
     uri.strip_prefix("file://").map(PathBuf::from)
+}
+
+fn path_to_file_uri(path: &Path) -> String {
+    format!("file://{}", path.display())
 }
 
 fn diagnostic_json(diagnostic: &Diagnostic, source: &str) -> String {

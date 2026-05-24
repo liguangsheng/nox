@@ -12,6 +12,7 @@ import "std/env.nox" as env;
 import "std/time.nox" as time;
 import "std/string.nox" as string;
 import "std/json.nox" as json;
+import "std/jsonl.nox" as jsonl;
 import "std/csv.nox" as csv;
 import "std/tsv.nox" as tsv;
 import "std/array.nox" as array;
@@ -25,6 +26,7 @@ import "std/http.nox" as http;
 import "std/task.nox" as task;
 import "std/test.nox" as test;
 import "std/encoding.nox" as encoding;
+import "std/hash.nox" as hash;
 import "std/dotenv.nox" as dotenv;
 import "std/ini.nox" as ini;
 import "std/toml.nox" as toml;
@@ -72,6 +74,26 @@ fn surface_enum_property(value: SurfaceEnum) -> bool {
     return true;
 }
 
+fn surface_double(value: int) -> int {
+    return value * 2;
+}
+
+fn surface_some_increment(value: int) -> option[int] {
+    return some(value + 1);
+}
+
+fn surface_positive(value: int) -> result[int, str] {
+    if (value > 0) {
+        return ok(value);
+    } else {
+        return err("not-positive");
+    }
+}
+
+fn surface_prefix(value: str) -> str {
+    return "error:" + value;
+}
+
 fn audit() -> int {
     let fs_probe: bool = fs.exists("placeholder.txt");
     let fs_is_file_probe: bool = fs.is_file("placeholder.txt");
@@ -80,6 +102,13 @@ fn audit() -> int {
     let fs_read_binary_probe: result[[int], str] = fs.read_binary("placeholder.bin");
     let fs_write_binary_probe: result[null, str] = fs.write_binary("placeholder.bin", []);
     let fs_canonicalize_probe: result[str, str] = fs.canonicalize("placeholder.bin");
+    let fs_read_text_async_probe: task[str] = fs.read_text_async("placeholder.txt");
+    let fs_try_read_text_async_probe: task[result[str, str]] = fs.try_read_text_async("placeholder.txt");
+    let fs_exists_async_probe: task[bool] = fs.exists_async("placeholder.txt");
+    let fs_list_async_probe: task[result[[str], str]] = fs.list_dir_async(".");
+    let fs_read_binary_async_probe: task[result[[int], str]] = fs.read_binary_async("placeholder.bin");
+    let fs_write_binary_async_probe: task[result[null, str]] = fs.write_binary_async("placeholder.bin", []);
+    let fs_canonicalize_async_probe: task[result[str, str]] = fs.canonicalize_async("placeholder.bin");
     let env_probe: map[str, str] = env.list();
     let time_sleep_probe: null = time.sleep_ms(0);
     let time_now_probe: int = time.now_unix();
@@ -116,6 +145,12 @@ fn audit() -> int {
     let json_decode_enum_probe: result[SurfaceEnum, str] = json.decode_adjacent_enum3(json_to_json_probe, "", "Number", surface_enum_from_json, "Name", surface_enum_from_json, "Flag", surface_enum_from_json);
     let json_defaults_probe: result[json, str] = json.apply_defaults(json_to_json_probe, json_to_json_probe);
     let json_defaults_deep_probe: result[json, str] = json.apply_defaults_deep(json_to_json_probe, json_to_json_probe);
+    let jsonl_parse_probe: result[[json], str] = jsonl.parse_lines("{}");
+    let jsonl_format_probe: str = jsonl.format_lines([json_to_json_probe]);
+    let csv_parse_rows_probe: result[[[str]], str] = csv.parse_rows("a,b\nc,d");
+    let csv_format_rows_probe: str = csv.format_rows([["a", "b"], ["c", "d"]]);
+    let tsv_parse_rows_probe: result[[[str]], str] = tsv.parse_rows("a\tb\nc\td");
+    let tsv_format_rows_probe: result[str, str] = tsv.format_rows([["a", "b"], ["c", "d"]]);
     let random_int_probe: (int, int) = random.next_int(1, 0, 10);
     let random_bool_probe: (int, bool) = random.next_bool(1);
     let random_float_probe: (int, float) = random.next_float_unit(1);
@@ -138,8 +173,13 @@ fn audit() -> int {
     let bytes_b64_decode_probe: result[[int], str] = bytes.base64_decode("YQ==");
     let bytes_hex_encode_probe: str = bytes.hex_encode([97]);
     let bytes_hex_decode_probe: result[[int], str] = bytes.hex_decode("61");
+    let hash_bytes_probe: str = hash.sha256_hex([97, 98, 99]);
+    let hash_text_probe: str = hash.sha256_text("abc");
+    let hash_hmac_bytes_probe: str = hash.hmac_sha256_hex([107], [97]);
+    let hash_hmac_text_probe: str = hash.hmac_sha256_text("key", "abc");
     let net_probe: bool = tcp_connect("0.0.0.0", 1);
     let async_sleep_probe: int = task_sleep_ms(0);
+    let async_awaitable_sleep_probe: task[null] = task_sleep(0);
     let async_ready_probe: bool = task_ready(0);
     let async_cancel_probe: null = task_cancel(0);
     let process_argv_probe: [str] = process.argv();
@@ -215,15 +255,26 @@ fn audit() -> int {
     let array_for_each_probe: null = array.for_each([1], fn(_: int) -> null { return null; });
     let array_dedupe_probe: [int] = array.dedupe([1, 2, 1]);
     let array_contains_value_probe: bool = array.contains_value([1, 2], 1);
+    let array_dedupe_equal_probe: [int] = array.dedupe_equal([1, 2, 1]);
+    let array_contains_equal_probe: bool = array.contains_equal([1, 2], 1);
     let url_query_encode_probe: str = url.query_encode("a b");
     let url_query_decode_probe: result[str, str] = url.query_decode("a%20b");
     let url_parse_probe: result[(str, str, int, str, str), str] = url.parse("http://example.com/");
     let url_build_probe: str = url.build("http", "example.com", 80, "/", "");
     let http_get_probe: result[(int, str), str] = http.get("http://127.0.0.1:1/", 1);
     let http_post_probe: result[(int, str), str] = http.post("http://127.0.0.1:1/", "", 1);
+    let http_request_probe: result[(int, map[str, str], str), str] = http.request("GET", "http://127.0.0.1:1/", {"x-test": "1"}, "", 1);
     let http_get_binary_probe: result[(int, [int]), str] = http.get_binary("http://127.0.0.1:1/", 1);
     let http_post_binary_probe: result[(int, [int]), str] = http.post_binary("http://127.0.0.1:1/", [], 1);
+    let http_request_binary_probe: result[(int, map[str, str], [int]), str] = http.request_binary("POST", "http://127.0.0.1:1/", {"x-test": "1"}, [], 1);
+    let http_get_async_probe: task[result[(int, str), str]] = http.get_async("http://127.0.0.1:1/", 1);
+    let http_post_async_probe: task[result[(int, str), str]] = http.post_async("http://127.0.0.1:1/", "", 1);
+    let http_request_async_probe: task[result[(int, map[str, str], str), str]] = http.request_async("GET", "http://127.0.0.1:1/", {"x-test": "1"}, "", 1);
+    let http_get_binary_async_probe: task[result[(int, [int]), str]] = http.get_binary_async("http://127.0.0.1:1/", 1);
+    let http_post_binary_async_probe: task[result[(int, [int]), str]] = http.post_binary_async("http://127.0.0.1:1/", [], 1);
+    let http_request_binary_async_probe: task[result[(int, map[str, str], [int]), str]] = http.request_binary_async("POST", "http://127.0.0.1:1/", {"x-test": "1"}, [], 1);
     let task_sleep_probe: int = task.sleep_ms(0);
+    let task_awaitable_sleep_probe: task[null] = task.sleep(0);
     let task_is_ready_probe: bool = task.is_ready(task_sleep_probe);
     let task_cancel_probe: null = task.cancel(task_sleep_probe);
     let task_wait_probe: bool = task.wait(task_sleep_probe);
@@ -276,11 +327,16 @@ fn audit() -> int {
     let option_is_some_probe: bool = option.is_some(option_probe);
     let option_is_none_probe: bool = option.is_none(option_none_probe);
     let option_unwrap_probe: int = option.unwrap_or(option_probe, 0);
+    let option_map_probe: option[int] = option.map(option_probe, surface_double);
+    let option_and_then_probe: option[int] = option.and_then(option_probe, surface_some_increment);
     let result_probe: result[int, str] = ok(1);
     let result_err_probe_value: result[int, str] = err("bad");
     let result_is_ok_probe: bool = result.is_ok(result_probe);
     let result_is_err_probe: bool = result.is_err(result_err_probe_value);
     let result_unwrap_probe: int = result.unwrap_or(result_probe, 0);
+    let result_map_probe: result[int, str] = result.map(result_probe, surface_double);
+    let result_map_err_probe_value: result[int, str] = result.map_err(result_err_probe_value, surface_prefix);
+    let result_and_then_probe: result[int, str] = result.and_then(result_probe, surface_positive);
     let result_map_err_probe: result[int, str] = result.map_err_to_str(result_probe);
     let json_parse_probe: result[json, str] = json.parse("{\"ok\":true}");
     let json_stringify_probe: str = "";

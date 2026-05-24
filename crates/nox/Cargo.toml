@@ -1,11 +1,16 @@
 [package]
 name = "nox"
+description = "Command-line runtime and tools for the Nox scripting language"
 edition.workspace = true
+repository = "https://github.com/liguangsheng/nox"
+readme = "README.md"
+keywords = ["scripting", "language", "cli", "runtime"]
+categories = ["command-line-utilities", "compilers", "development-tools"]
 license.workspace = true
 version.workspace = true
 
 [dependencies]
-nox_core = { path = "../nox_core" }
+nox_core = { version = "0.0.5", path = "../nox_core" }
 
 [dev-dependencies]
 criterion = "0.5"

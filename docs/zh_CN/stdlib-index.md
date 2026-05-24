@@ -17,19 +17,22 @@
 | --- | --- | --- | --- |
 | 文本和数据处理 | `std/string.nox` | stable | split / substring / trim / replace / contains / pad / parse_int / parse_float / join / lines |
 | 文本和数据处理 | `std/json.nox` | stable | parse / stringify / kind / array_len / array_get / object_has / object_get / require_field / validate_schema / validate_object / apply_defaults / apply_defaults_deep / to_json / from_json / variant_name / variant_payload / decode_record3 / decode_adjacent_enum3 / as_int / as_float / as_str / as_bool / as_array / as_object |
-| 文本和数据处理 | `std/csv.nox` / `std/tsv.nox` | stable | 单行 parse / format helper |
+| 文本和数据处理 | `std/jsonl.nox` | stable | JSON Lines 文本的 parse_lines / format_lines；parse 错误包含 1-based 行号 |
+| 文本和数据处理 | `std/csv.nox` / `std/tsv.nox` | stable | 单行 parse / format helper，以及内存多行文本 parse_rows / format_rows |
+| 文本和数据处理 | `std/hash.nox` | stable | sha256_hex / sha256_text / hmac_sha256_hex / hmac_sha256_text，用于确定性 SHA-256 和 HMAC-SHA256 digest |
 | 集合 | `std/array.nox` | stable | len / is_empty / push_copy / concat / slice_copy / reverse_copy / sort_copy_int / sort_copy_str / set / append / pop / map_fn / filter_fn / reduce / for_each / dedupe / contains_value |
+| 集合 | `std/array.nox` | experimental | Eq trait / dedupe_equal / contains_equal；静态 trait MVP 表面仍可能调整 |
 | 集合 | `std/map.nox` | stable | keys / values / entries / merge / remove_copy / get_or / set / delete |
-| 选项与结果 | `std/option.nox` / `std/result.nox` | stable | is_some / is_none / is_ok / is_err / unwrap_or / map_err_to_str |
+| 选项与结果 | `std/option.nox` / `std/result.nox` | stable | is_some / is_none / is_ok / is_err / unwrap_or / map / map_err / and_then / map_err_to_str |
 | 编码 | `std/encoding.nox` | stable | base64_encode / base64_decode / hex_encode / hex_decode |
 | 配置 | `std/dotenv.nox` | stable | parse (KEY=value，支持注释和引号) |
 | 配置 | `std/ini.nox` | stable | parse 简单 section 和 key/value |
 | 配置 | `std/toml.nox` | stable | parse 最小 TOML 子集到 json |
 | URL | `std/url.nox` | stable | parse / build / query_encode / query_decode |
-| HTTP | `std/http.nox` | stable, permissioned (`network`) | get / post / get_binary / post_binary over HTTP/1.1（仅明文）；1 MiB 响应上限；30s 默认超时 |
+| HTTP | `std/http.nox` | stable, permissioned (`network`) | get / post / request / get_binary / post_binary / request_binary over HTTP/1.1（仅明文），以及对应 `_async` wrapper；request helper 支持自定义请求 header 和返回 response headers；1 MiB 响应上限；30s 默认超时 |
 | 时间 | `std/time.nox` | stable | sleep_ms (permissioned) / now_unix / now_unix_ms / duration_ms / format_unix / parse_unix / from_seconds / from_minutes / from_hours / to_seconds / to_minutes / to_hours / iso8601_format / iso8601_parse / deadline_ms / is_past_deadline_ms / add_days / add_months / year_of / month_of / day_of / weekday_of |
-| 异步任务 | `std/task.nox` | stable, permissioned (`async task`) | sleep_ms / is_ready / cancel / wait / wait_or_timeout / pending_count |
-| 文件系统 | `std/fs.nox` | stable, permissioned (`filesystem` / `filesystem_write`) | exists / read_text / try_read_text / write_text / read_binary / write_binary / canonicalize / is_file / is_dir / list_dir |
+| 异步任务 | `std/task.nox` | stable, permissioned (`async task`) | sleep_ms / sleep / is_ready / cancel / wait / wait_or_timeout / pending_count |
+| 文件系统 | `std/fs.nox` | stable, permissioned (`filesystem` / `filesystem_write`) | exists / read_text / try_read_text / write_text / read_binary / write_binary / canonicalize / is_file / is_dir / list_dir，以及对应 `_async` wrapper |
 | 路径 | `std/path.nox` | stable | join / basename / dirname / extension / normalize（纯计算，不访问文件系统） |
 | 环境 | `std/env.nox` | stable, permissioned (`environment`) | get / try_get / list |
 | 进程 | `std/process.nox` | stable / stable, permissioned (`process_run`) | argv / read_stdin / print_err / exit / run（run 需要 `process_run`） |
@@ -50,5 +53,5 @@
   `RuntimePermissions` 字段、CLI `--permission` 文档。
 - 标注 experimental 的模块必须在自身文档头部说明边界条件；进入 stable 后再移除
   标签。
-- 文档与 runtime registry 一致性：本索引由人维护；后续 ADR 决定是否引入
-  半自动校验脚本（如对比 `install_std_module_aliases` 注册项 vs 索引行）。
+- 文档与 runtime registry 一致性由测试守护：runtime registry 返回的 std module 必须出现在
+  本索引中，导出的 helper 必须在本索引或 `docs/zh_CN/runtime.md` 中被提到。

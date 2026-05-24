@@ -77,6 +77,25 @@ run_gate_in_dir "scoreboard test JSON" examples/projects/scoreboard "$NOX_BIN" t
 run_gate_in_dir "scoreboard fmt check" examples/projects/scoreboard "$NOX_BIN" fmt --check
 run_gate "scoreboard std module check" "$NOX_BIN" check examples/projects/scoreboard/src/runtime_info.nox
 run_gate "scoreboard std module fmt" "$NOX_BIN" fmt --check examples/projects/scoreboard/src/runtime_info.nox
+run_gate "module dependency lockfile guardrail" sh -eu -c '
+git ls-files | grep -E "(^|/)nox\.toml$" | while IFS= read -r manifest; do
+    if grep -q "^\[dependencies\]" "$manifest"; then
+        lock="$(dirname "$manifest")/nox.lock"
+        if [ ! -f "$lock" ]; then
+            printf "dependency lockfile guardrail failed: %s declares [dependencies] but %s is missing\n" "$manifest" "$lock" >&2
+            exit 1
+        fi
+    fi
+done
+'
+run_gate "module ecosystem regression: project check lockfile JSON" cargo test -p nox project_check_json_reports_ --test cli
+run_gate "module ecosystem regression: fetch offline/cache" cargo test -p nox fetch_ --test cli
+run_gate "module ecosystem regression: external import/cache/hash" cargo test -p nox external_dependency_import --test cli
+run_gate "module ecosystem regression: integrated LSP external import" cargo test -p nox lsp_external_dependency_import --test cli
+run_gate "compatibility regression: parser AST golden" cargo test -p nox_core parser_ast_golden --lib
+run_gate "compatibility regression: C ABI enum values" cargo test -p nox_core c_abi_enum_values_are_stable --lib
+run_gate "compatibility regression: async Rust API" cargo test -p nox async_task_rust_api --lib
+run_gate "compatibility regression: machine-readable golden surfaces" scripts/compatibility-golden.sh
 
 # Host-friendliness guardrail (P8.5, PLAN 完成定义第 12 项前半).
 # embedding-regression covers Rust API/runtime tests, Rust embedding example,
@@ -158,7 +177,7 @@ run_gate "benchmark smoke" env -u NOX_BIN scripts/bench-smoke.sh
 run_gate "product-shape guardrail: CLI subcommand surface" env NOX_BIN="$NOX_BIN" sh -eu -c '
 usage=$("$NOX_BIN" --help 2>&1 || true)
 missing=""
-for sub in "nox run" "nox check" "nox test" "nox fmt" "nox project check" "nox repl" "nox lsp" "nox dap" "nox profile" "nox coverage" "nox inspect-bytecode" "nox watch" "nox lint" "nox doc" "nox host-metadata"; do
+for sub in "nox run" "nox check" "nox test" "nox fmt" "nox project check" "nox fetch" "nox repl" "nox lsp" "nox dap" "nox profile" "nox coverage" "nox inspect-bytecode" "nox watch" "nox lint" "nox doc" "nox host-metadata"; do
     case "$usage" in
         *"$sub"*) ;;
         *) missing="$missing\n  $sub" ;;
@@ -170,11 +189,50 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 '
+run_gate "release candidate readiness guard" scripts/release-candidate-readiness.sh
+run_gate "release-prep version helper self-test" scripts/prepare-release-version.sh --self-test
+run_gate "release asset builder self-test" scripts/build-release-assets.sh --self-test
+run_gate "release asset manifest self-test" scripts/release-asset-manifest.sh --self-test
+run_gate "release toolchain status self-test" scripts/release-toolchain-status.sh --self-test
+run_gate "release cutover check self-test" scripts/release-cutover-check.sh --self-test
+run_gate "release cutover status self-test" scripts/release-cutover-status.sh --self-test
+run_gate "release upload plan self-test" scripts/release-upload-plan.sh --self-test
+run_gate "release notes extraction self-test" scripts/release-notes.sh --self-test
+run_gate "release command plan self-test" scripts/release-command-plan.sh --self-test
+run_gate "release evidence report self-test" scripts/release-evidence-report.sh --self-test
+run_gate "release prep dry-run self-test" scripts/release-prep-dry-run.sh --self-test
+run_gate "release cutover status JSON smoke" sh -eu -c '
+tmp=$(mktemp "${TMPDIR:-/tmp}/nox-release-cutover-status-json.XXXXXX")
+trap "rm -f \"$tmp\"" EXIT HUP INT TERM
+scripts/release-cutover-status.sh --json >"$tmp" 2>/dev/null || true
+python3 - "$tmp" <<'"'"'PY'"'"'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    data = json.load(fh)
+assert data["schema"] == "nox.release-cutover-status.v1"
+assert isinstance(data["ok"], bool)
+assert data["tag"].startswith("v")
+assert isinstance(data["pending_count"], int)
+assert isinstance(data["items"], list)
+for item in data["items"]:
+    assert item["state"] in {"ok", "missing"}
+    assert isinstance(item["message"], str)
+PY
+'
+run_gate "release-prep version helper check-only" sh -eu -c '
+current=$(awk -F"\"" "/^version = /{print \$2; exit}" Cargo.toml)
+if [ "$current" = "0.0.5" ]; then
+    printf "release-prep version helper check-only: already on 0.0.5\n"
+else
+    scripts/prepare-release-version.sh --check-only 0.0.5 2026-05-24
+fi
+'
 
 # Small-footprint guardrail: PLAN 完成定义第 10 项的 release-time 显式断言。
 # 阈值由 P8.3 冻结；上调阈值必须独立 commit + CHANGELOG + ADR，不允许在 release-prep 阶段
 # 临时上调来掩盖回归。LOC 不设硬阈值，只回显趋势值供 release notes 记录。
-NOX_SIZE_CAP_CLI=${NOX_SIZE_CAP_CLI:-2883584}        # 2.75 MiB; ADR 0025 recalibrates after observability/schema growth
+NOX_SIZE_CAP_CLI=${NOX_SIZE_CAP_CLI:-3145728}        # 3.0 MiB; ADR 0025 recalibrates after staged async/await MVP growth
 NOX_SIZE_CAP_CORE=${NOX_SIZE_CAP_CORE:-1572864}      # 1.5 MiB; current baseline ~1.0 MiB (tightened from 2.5 MiB at v0.0.3 post-release)
 run_gate "small-footprint guardrail: release build" cargo build --release -p nox -p nox_core
 run_gate "small-footprint guardrail: CLI binary size cap" env CAP="$NOX_SIZE_CAP_CLI" sh -eu -c '

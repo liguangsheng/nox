@@ -20,8 +20,9 @@ Important code families include:
 - `runtime.index-out-of-range` for out-of-range index assignments such as `arr[i] = v`.
 - `type.assign-target` for assignment targets that are not a variable, array index, or map index.
 - `generic.constraint-unsatisfied` when a generic function's actual type argument does not implement the declared built-in marker (Equatable / Comparable / Stringify / Hashable).
-- `generic.constraint-unknown` when a `<T: Marker>` clause references a marker name that is not in the built-in set.
-- `parse.reserved-keyword` when source code uses `try`, `catch`, `panic`, `defer`, or `finally` as an identifier; these words are reserved per ADR 0021 for future exception-mechanism evaluation.
+- `generic.constraint-unknown` for the legacy built-in marker path. Since the trait MVP, `<T: Name>` is first parsed as a trait bound and unknown names use `trait.not-found`.
+- `trait.not-found`, `trait.impl-duplicate`, `trait.impl-incomplete`, `trait.method-signature-mismatch`, `trait.bound-unsatisfied`, `trait.method-not-found`, and `trait.method-ambiguous` for the experimental static trait MVP. In the current MVP, `trait.method-ambiguous` also covers impl method names that would collide with top-level functions.
+- `parse.reserved-keyword` when source code uses `try`, `catch`, `panic`, `defer`, or `finally` as an identifier; these words remain reserved while ADR 0028 keeps exceptions and `try {}` blocks out of the language surface.
 - `watch.path-not-found` when `nox watch` is started but a `source_dirs` / `test_dirs` entry declared in the manifest does not exist on disk.
 - `test.assertion-failed` when an `assert_*` / `fail` helper in `std/test.nox` rejects a test case.
 - `runtime.call-stack-overflow` when script call-stack depth exceeds `Engine::set_max_call_stack_depth`. When the limit is not configured, the runtime falls back to the OS stack and no diagnostic is raised.
@@ -29,7 +30,8 @@ Important code families include:
 - `runtime.array-length-cap` when an array literal construction or `array.append` growth exceeds `Engine::set_max_array_length`. No diagnostic is raised when the cap is not configured.
 - `runtime.map-size-cap` when a map literal construction, `map.set`, or map index assignment grows past `Engine::set_max_map_entries`. Updating an existing key does not increase the entry count. No diagnostic is raised when the cap is not configured.
 - `runtime.heap-object-cap` when VM allocations or host callback return values make the engine heap exceed `Engine::set_max_heap_objects`. No diagnostic is raised when the cap is not configured.
-- `runtime.task-pending-cap` when `task_sleep_ms` would exceed `RuntimePermissions::async_task_max_pending`. The default limit is 1024 pending sleep tasks per `Runtime`.
+- `runtime.task-pending-cap` when `task_sleep_ms` or awaitable `task_sleep` / `task.sleep` would exceed `RuntimePermissions::async_task_max_pending`. The default limit is 1024 pending sleep tasks per `Runtime`.
+- `async.await-outside-async`, `async.await-non-task`, and `async.top-level-task` for the staged `async fn` / `await` MVP.
 - `lint.unused-variable` / `lint.unused-function` / `lint.unused-import` when `nox lint` detects top-level declarations that are never referenced. Underscore-prefixed variables and the `main` entry function are exempted.
 - `lint.unreachable-code` when `nox lint` detects statements after `return`, `break`, or `continue` in the same block (function body, if branch, while/for body, or lambda body).
 - `lint.shadowed-variable` when `nox lint` detects an inner `let` declaration that shadows an outer same-named binding (function parameter or outer `let`). Underscore-prefixed names are exempted.

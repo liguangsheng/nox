@@ -28,6 +28,8 @@ cc -Inox-embed-v0.0.2-x86_64-unknown-linux-gnu/include \
 ```
 
 Public ABI expectations include stable enum values, explicit handle ownership, engine-owned error strings, and documented host callback boundaries.
+Runtime async tasks belong to the `nox` crate, not `nox_core`; the C ABI does
+not expose task handles in this stage.
 
 ## C Host Callbacks
 
@@ -140,6 +142,29 @@ The mock covers `tcp_connect` and `std/http.nox` text/binary GET and POST
 helpers. Each helper still checks the `network` capability before consulting
 the mock. Missing mocked HTTP responses return `result.err` and do not fall
 back to the real network.
+
+## Runtime Async Tasks
+
+Embedding hosts that use the `nox` crate can drive the same single-runtime
+task table used by `std/task.nox`:
+
+```rust
+use nox::{AsyncTaskPoll, Runtime, RuntimePermissions};
+use std::time::Duration;
+
+let mut runtime = Runtime::with_permissions(RuntimePermissions {
+    async_tasks: true,
+    ..RuntimePermissions::none()
+});
+
+let id = runtime.spawn_sleep_task(Duration::from_millis(0))?;
+assert_eq!(runtime.poll_async_task(id)?, AsyncTaskPoll::Ready);
+```
+
+`spawn_sleep_task`, `poll_async_task`, and `cancel_async_task` use the same
+`async_tasks` permission, pending-task cap, unknown-id diagnostic, and cleanup
+rules as the script helpers. Ready and cancelled tasks are consumed and become
+unknown on later polls.
 
 ## Heap Limits
 

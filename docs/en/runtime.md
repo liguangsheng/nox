@@ -12,9 +12,26 @@ import "std/env.nox" as env;
 import "std/time.nox" as time;
 import "std/string.nox" as string;
 import "std/json.nox" as json;
+import "std/jsonl.nox" as jsonl;
+import "std/hash.nox" as hash;
 ```
 
 Older global functions remain available as compatibility surface, but new code should prefer namespace imports.
+
+## Error Model
+
+Recoverable failures are ordinary `result[T, E]` or `option[T]` values. Use
+postfix `?` inside functions to propagate `err` or `none`, and use `match`,
+`if let`, `while let`, or `let ... else` when the script should handle both
+branches locally.
+
+Runtime diagnostics are not catchable exceptions. Permission denials, allowlist
+escapes, resource caps, parser/typechecker failures, host callback panics,
+host callback type mismatches, and VM diagnostics terminate the current eval or
+test case. Standard library helpers only return `result.err` or `none` for
+ordinary recoverable failures after the relevant capability and safety checks
+have passed.
+
 `std/string.nox` is pure computation and requires no runtime capability. It exposes
 `split`, `substring`, `trim`, `replace`, `starts_with`, `ends_with`, `index_of`,
 `contains`, `last_index_of`, `join`, `repeat`, `pad_left`, `pad_right`,
@@ -27,15 +44,35 @@ for number, string, bool, null, array, and object JSON values. It also exposes
 `kind`, `array_len`, `array_get`, `object_has`, and `object_get`; helper failures
 return `result.err(message)`.
 
+`std/jsonl.nox` is pure computation for JSON Lines text. `parse_lines(source) ->
+result[[json], str]` parses one JSON value per line and prefixes parse failures
+with a 1-based line number such as `line 2: expected JSON value`.
+`format_lines(values) -> str` joins `json.stringify` output with `\n` and does
+not append a trailing newline.
+
 `std/csv.nox` and `std/tsv.nox` provide line-oriented helpers. `parse_line` returns
 `result[[str], str]`; `csv.format_row(values: [str]) -> str` quotes fields as
 needed, and `tsv.format_row(values: [str]) -> result[str, str]` rejects fields that
-contain tabs. These modules are not streaming parsers.
+contain tabs. `parse_rows(source) -> result[[[str]], str]` and `format_rows(rows)`
+operate on in-memory multi-row text; they are not streaming parsers.
+
+`std/hash.nox` is pure computation for deterministic SHA-256 and HMAC-SHA256
+digests. `sha256_text(value) -> str` hashes UTF-8 text, and
+`sha256_hex(bytes) -> str` hashes `[int]` byte arrays whose elements must be in
+`0..=255`. `hmac_sha256_text(key, value) -> str` signs UTF-8 text with a UTF-8
+key, and `hmac_sha256_hex(key, bytes) -> str` signs `[int]` byte arrays with a
+`[int]` key. All helpers return lowercase hexadecimal digest strings.
 
 `std/array.nox`, `std/map.nox`, `std/option.nox`, and `std/result.nox` are pure
 computation modules for common data transformations. Most array and map helpers
-return copies; result and option helpers expose status checks and fallbacks
-without closures or higher-order functions.
+return copies, while the explicitly named mutation helpers are documented later
+in this page. Array higher-order helpers accept `fn(...) -> ...` function values
+or lambda literals; result and option helpers expose status checks, fallbacks,
+`map`, `map_err`, and `and_then` composition.
+`std/array.nox` also exports the experimental `Eq` trait plus
+`contains_equal<T: Eq>` and `dedupe_equal<T: Eq>`, while the older
+`contains_value<T: Equatable>` and `dedupe<T: Equatable>` helpers remain
+available.
 
 `std/url.nox` provides pure URL helpers: `parse(url) -> result[(scheme, host, port,
 path, query), str]`, `build(scheme, host, port, path, query) -> str`, `query_encode`,
@@ -133,6 +170,16 @@ the absolute canonical path with symlinks resolved. The input path is gated by
 the `filesystem` read capability and read allowlist; the resolved output is
 only returned to the script. Returns `result.err` when the underlying
 `fs::canonicalize` fails (missing file, permission denied at the OS level).
+
+`std/fs.nox` provides async-friendly wrappers with the `_async` suffix:
+`read_text_async`, `try_read_text_async`, `exists_async`, `is_file_async`,
+`is_dir_async`, `list_dir_async`, `write_text_async`, `read_binary_async`,
+`write_binary_async`, and `canonicalize_async`. They are regular `async fn`
+wrappers around the synchronous helpers, so calls return `task[T]` at the call
+site and can be awaited inside `async fn` bodies. They do not add an IO reactor
+or background filesystem scheduler; every awaited operation uses the same
+`filesystem` / `filesystem_write` capability checks, allowlists, mock
+filesystem, return values, and diagnostics as the synchronous helper it wraps.
 
 Embedding hosts can call `Runtime::set_mock_filesystem(Some(MockFilesystem))`
 to replace the read side of `std/fs.nox` for one runtime instance. The mock
@@ -280,27 +327,49 @@ builders (`fn(int) -> T`, `fn(str) -> T`, `fn(bool) -> T`) and shrinks both the
 payload and variant choice toward the first variant.
 
 `std/task.nox` wraps the runtime's sleep-based async task primitives:
-`sleep_ms(ms) -> int` spawns a timer and returns a task id, `is_ready(id)` polls
-without blocking, `cancel(id)` removes a pending task, `wait(id) -> bool` blocks
-until the task completes (or forever for an unknown id), `wait_or_timeout(id,
-timeout_ms) -> bool` blocks up to the timeout and cancels the task on expiration
-returning `false`, and `pending_count() -> int` exposes the current outstanding
-task count. All entries require the `async task` capability.
+`sleep_ms(ms) -> int` spawns a timer and returns a task id, `sleep(ms) ->
+task[null]` creates an awaitable sleep task for `async fn` bodies,
+`is_ready(id)` polls without blocking, `cancel(id)` removes a pending task,
+`wait(id) -> bool` blocks until the task completes (or forever for an unknown
+id), `wait_or_timeout(id, timeout_ms) -> bool` blocks up to the timeout and
+cancels the task on expiration returning `false`, and `pending_count() -> int`
+exposes the current outstanding task count. All entries require the `async
+task` capability.
 `RuntimePermissions::async_task_max_pending` defaults to `Some(1024)` and makes
-`task_sleep_ms` fail with `runtime.task-pending-cap` before creating a new task
-when the current pending count is already at the configured limit. Set it to
-`None` only for trusted embedding hosts that provide their own task accounting.
+`task_sleep_ms` and `task_sleep` / `task.sleep` fail with
+`runtime.task-pending-cap` before creating a new task when the current pending
+count is already at the configured limit. Set it to `None` only for trusted
+embedding hosts that provide their own task accounting.
+Rust embedding hosts can drive the same single-runtime task table through
+`Runtime::spawn_sleep_task`, `Runtime::poll_async_task`, and
+`Runtime::cancel_async_task`. These APIs use the same `async_tasks` permission,
+pending cap, unknown-id diagnostic, and cleanup rules as the script helpers.
+If an `async fn` fails after creating awaitable sleep tasks, top-level
+`Runtime::eval` cleanup removes tasks created by that call while preserving
+tasks that existed before the call. Diagnostics raised at an awaitable task
+boundary retain both host and script stack frames.
+The C ABI does not expose runtime task handles in this stage.
 
-`std/http.nox` provides a minimal HTTP/1.1 client over plain TCP: `get(url,
-timeout_ms)` and `post(url, body, timeout_ms)` both return `result[(int, str), str]`
-with the HTTP status and the response body. Only `http://` URLs are supported in
-the current runtime; HTTPS, chunked transfer-encoding, keep-alive, and custom
-headers are not implemented yet and require a future ADR before adding TLS. All
-HTTP calls require the `network` capability, are capped at 1 MiB of response data,
-default to a 30s timeout when `timeout_ms <= 0`, and always send
+`std/http.nox` provides a minimal HTTP/1.1 client over plain TCP. The simple
+helpers `get(url, timeout_ms)` and `post(url, body, timeout_ms)` return
+`result[(int, str), str]` with the HTTP status and response body. The generic
+helpers `request(method, url, headers, body, timeout_ms) -> result[(int,
+map[str, str], str), str]` and `request_binary(method, url, headers, body,
+timeout_ms) -> result[(int, map[str, str], [int]), str]` also accept custom
+request headers and return response headers. Response header names are lowercased;
+duplicate response headers are folded by joining values with `", "`.
+Custom `Content-Length` is rejected because Nox computes it from the body.
+Custom `Host`, `User-Agent`, `Accept`, and `Connection` are ignored in favor of
+the runtime defaults.
+
+Only `http://` URLs are supported in the current runtime; HTTPS, chunked
+transfer-encoding, keep-alive, cookie jars, redirects, auth frameworks, and
+streaming bodies are not implemented yet and require a future ADR before adding
+TLS. All HTTP calls require the `network` capability, are capped at 1 MiB of
+response data, default to a 30s timeout when `timeout_ms <= 0`, and always send
 `Connection: close`.
 
-`std/http.nox` also exposes binary-body variants:
+`std/http.nox` also keeps the simple binary-body variants:
 `get_binary(url, timeout_ms) -> result[(int, [int]), str]` and
 `post_binary(url, body, timeout_ms) -> result[(int, [int]), str]`. Both share
 the same `network` capability, 1 MiB cap, default timeout, and `Connection:
@@ -308,6 +377,14 @@ close` semantics; bodies are exchanged as `[int]` byte arrays without lossy
 UTF-8 conversion, suitable for images, archives, or binary protocols. The
 existing string-bodied `get` / `post` continue to work and now share their
 implementation with the binary variants under the hood.
+
+`std/http.nox` also exposes async-friendly wrappers with the `_async` suffix:
+`get_async`, `post_async`, `request_async`, `get_binary_async`,
+`post_binary_async`, and `request_binary_async`. These wrappers are regular
+`async fn` functions around the existing blocking HTTP helpers. Awaiting them
+does not grant network access, skip mocks, or change timeout / response-size
+rules; it uses the same `network` capability and the same HTTP implementation
+as the synchronous helper.
 
 Embedding hosts can call `Runtime::set_mock_network(Some(MockNetwork))` to
 replace `tcp_connect` and `std/http.nox` for one runtime instance. The mock is

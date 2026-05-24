@@ -1,8 +1,8 @@
 # 包 Manifest
 
 本文记录已实现的 `nox.toml` 项目 manifest。v0.0.3 起，manifest 是项目入口、
-测试目录、import 搜索根和运行时权限声明的统一来源；它仍不引入 registry、依赖求解或
-版本范围语法。
+测试目录、import 搜索根、GitHub/git dependency 声明和运行时权限声明的统一来源；它仍不
+引入 registry、依赖求解或版本范围语法。
 
 ## 目标
 
@@ -10,6 +10,8 @@
   项目根路径。
 - 保持 import 行为向后兼容：未提供 manifest 时，行为与之前完全一致。
 - 为后续 CLI、LSP、`nox test` 和项目级检查提供统一入口。
+- 允许项目声明 pinned GitHub/git 依赖，并通过 `nox fetch` 生成 lockfile、填充 cache；
+  `import "<dependency>/<path>.nox"` 可以从 lock/cache 解析 external module。
 - 允许项目声明需要的 runtime 权限，但声明只用于文档和后续检查，不自动授予危险能力。
 
 ## 非目标
@@ -18,6 +20,7 @@
 - 不做依赖求解。
 - 不做版本范围语法。
 - 不做 `node_modules` 布局。
+- 不在 `run` / `check` 缺失 lock/cache 时静默联网下载依赖。
 - manifest 不会改变相对 import 的语义，只是在相对路径解析失败时再尝试
   项目内 source 根。
 
@@ -47,6 +50,10 @@ admin = "src/admin.nox"
 source_dirs = ["src"]
 test_dirs = ["tests"]
 
+[dependencies]
+mathx = { github = "owner/mathx", rev = "0123456789abcdef0123456789abcdef01234567" }
+tools = { git = "https://github.com/owner/tools.git", tag = "v0.2.0" }
+
 [runtime]
 permissions = ["filesystem.read"]
 ```
@@ -67,6 +74,12 @@ permissions = ["filesystem.read"]
 - `modules.test_dirs`：可选字符串数组，相对 manifest 所在目录，不能使用绝对路径或
   `..` 逃逸项目根，重复目录会被拒绝。`nox test` 无显式路径时
   优先递归发现这些目录下的 `*_test.nox`；未配置时回退到 `source_dirs`，再回退到项目根。
+- `dependencies.<name>`：可选 inline table。当前会解析、校验；`nox fetch` 会下载到
+  module cache 并生成 `nox.lock`，`project check` 会校验对应 `nox.lock`；
+  `import "<dependency>/<path>.nox"` 会从 lock/cache 解析 external module。每个 dependency 必须提供且只
+  提供一个 source：`github = "owner/repo"` 或 `git = "https://..."` / `ssh://...` /
+  `file://...`；同时必须提供且只提供一个 pin：完整 40 字符 commit hash `rev = "..."` 或
+  `tag = "..."`。
 - `runtime.permissions`：可选字符串数组。允许值为 `filesystem.read`、`filesystem.write`、
   `network`、`timers`、`environment`、`async_tasks`、`process_run`。这些值只声明项目期望能力，不会让
   CLI 或宿主自动授予权限，也不会配置文件系统 allowlist。宿主仍需要用
@@ -74,15 +87,18 @@ permissions = ["filesystem.read"]
 
 ## 解析规则
 
-- manifest 解析器只接受字符串和字符串数组值。其他 TOML 类型（数字、表、
-  内联表、布尔）当前都不支持，遇到时返回诊断。
+- manifest 解析器接受字符串、字符串数组，以及 `[dependencies]` 内的字符串 inline table。
+  其他 TOML 类型（数字、布尔、嵌套表等）当前都不支持，遇到时返回诊断。
 - manifest schema 是封闭的：只支持 `[package]`、`[entrypoints]`、`[modules]`、
-  `[runtime]` 四个 section；`[package]`、`[modules]`、`[runtime]` 中未知 key 会返回
-  `manifest.invalid`。`[entrypoints]` 允许除 `main` 之外的命名入口。
+  `[dependencies]`、`[runtime]` 五个 section；`[package]`、`[modules]`、`[runtime]`
+  和 dependency inline table 中未知 key 会返回 `manifest.invalid`。`[entrypoints]` 允许除
+  `main` 之外的命名入口。
 - `[package]` 必须包含 `name` 和 `version`；`description` 可选。
 - `[entrypoints]` 中所有键都必须是字符串。`main` 是默认入口，其他键作为命名入口保留。
 - `[modules]` 中 `source_dirs` 和 `test_dirs` 都必须是字符串数组，路径必须留在项目根内且
   单个数组内不能重复。
+- `[dependencies]` 中每个 dependency 都必须是 inline table，并且只能使用 `github` / `git`
+  与 `rev` / `tag` 组合；浮动默认分支不属于生产稳定 pin。
 - `[runtime]` 中 `permissions` 必须是字符串数组，未知权限名返回诊断。
 - 字符串里目前不支持嵌入 `"`；如有特殊需要请使用更简单的标识符。
 - 注释以 `#` 开头，到行尾结束。字符串中的 `#` 不视为注释。
@@ -109,9 +125,50 @@ permissions = ["filesystem.read"]
 3. manifest 根目录。
 4. 没有 manifest 时使用当前工作目录。
 
-`nox project check` 要求能从当前目录或父目录发现 manifest，然后在 manifest root 下依次运行
-`check`、`test` 和 `fmt --check`。`project check --json` 输出 `nox.project-check.v1`，
-显式报告 manifest root、package name/version 和三个子步骤的退出码，用于 CI 识别项目边界。
+## Lockfile
+
+lockfile 文件名固定为 `nox.lock`，位于 manifest root。只要 manifest 声明了
+`[dependencies]`，`nox project check` 就要求 `nox.lock` 存在并与 manifest 匹配；缺少、
+格式错误、source/pin drift 或多余依赖都会让项目检查失败。`nox fetch` 是显式生成或更新
+lockfile 的入口；`project check` 本身不会联网 fetch。
+
+当前 lockfile 使用封闭的 TOML 子集：
+
+```toml
+[lock]
+version = "1"
+
+[dependencies.mathx]
+source_kind = "github"
+source = "owner/mathx"
+pin_kind = "rev"
+pin = "0123456789abcdef0123456789abcdef01234567"
+resolved = "0123456789abcdef0123456789abcdef01234567"
+content_hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+cache_key = "github-owner-mathx-0123456789abcdef0123456789abcdef01234567"
+tool = "nox 0.0.4"
+```
+
+`resolved` 必须是完整 commit hash；`content_hash` 必须是 `sha256:<64 hex>`；
+`cache_key` 和 `tool` 必须非空。`tag` pin 会在 lockfile 中保留原始 tag，同时用
+`resolved` 固定实际 commit。
+
+`nox fetch [--offline] [--cache-dir <dir>]` 会发现 manifest，按 dependency source 创建或更新
+module cache，解析 pin，计算 content hash，并写入 `nox.lock`。默认 cache 目录优先使用
+`NOX_MODULE_CACHE`，否则使用 `$HOME/.cache/nox/modules`。`--offline` 不执行 git fetch，
+只消费已有 cache；cache 缺失或损坏时失败。下载动作不会给脚本运行阶段授予 runtime
+permissions。
+
+module cache 是本地可丢弃缓存，不属于项目源码状态。删除 cache 后，提交的 `nox.toml` 和
+`nox.lock` 仍是复现依据；重新运行 `nox fetch` 可以恢复 cache。CI 如果需要完全锁网，
+应固定 `--cache-dir <dir>`，预先填充该目录，然后用 `nox fetch --offline --cache-dir <dir>`
+校验 cache，后续命令通过 `NOX_MODULE_CACHE=<dir>` 读取同一份 cache。
+
+`nox project check` 要求能从当前目录或父目录发现 manifest，然后在 manifest root 下依次校验
+lockfile 并运行 `check`、`test` 和 `fmt --check`。当前 `project check` 不下载 dependency；
+缺少 lockfile 也不会联网。`project check --json` 输出 `nox.project-check.v1`，显式报告
+manifest root、package name/version、dependency 声明、lockfile 状态和三个子步骤的退出码，
+用于 CI 识别项目边界。
 
 ## import 解析
 
@@ -120,14 +177,24 @@ permissions = ["filesystem.read"]
 1. `<当前文件所在目录>/<specifier>` —— 与历史行为一致。
 2. 如果发现 manifest 且 `modules.source_dirs` 非空，则按数组顺序尝试
    `<manifest 根>/<source_dir>/<specifier>`。
-3. 全部失败时，按第一步的相对路径报告找不到文件的诊断。
+3. 如果 `specifier` 形如 `<dependency>/<path>.nox`，并且 manifest `[dependencies]` 中存在
+   同名 dependency，则从 `nox.lock` 指向的 module cache 读取对应 resolved commit 下的
+   `<path>.nox`，并校验 cache archive hash 与 lockfile `content_hash` 一致。
+4. 全部失败时，按第一步的相对路径报告找不到文件的诊断。
 
 manifest 不会改变 import 的语义，只是在相对路径找不到文件时给出第二次
 机会。这样既保留旧脚本的工作方式，又允许小项目通过 `source_dirs` 让 import
 从项目根解析。
+
+External dependency import 不会触发联网下载；缺少 lockfile、cache miss、cache corrupt 或
+hash mismatch 都是诊断错误。若 `nox fetch` 使用了非默认 `--cache-dir`，后续命令需要设置
+`NOX_MODULE_CACHE` 指向同一个 cache。
 
 ## 后续工作
 
 - LSP 在打开文档时使用 manifest 提供项目根，避免依赖磁盘。
 - manifest 内的命名空间 import（`import "math.nox" as math;`）属于阶段 16.2 的独立设计。
 - runtime 权限声明进入检查/提示层，但危险能力仍由宿主或 CLI 显式授予。
+- external import resolution 已接入 `run` / `check` / `test` / LSP diagnostics；LSP
+  definition/workspace symbol 对 external dependency 保持保守，不伪造文件位置、不混入项目符号。
+  `nox doc` 仍只扫描传入文件本身，外部 module 文档聚合留给后续专门设计。

@@ -1,0 +1,12 @@
+async fn compute(value: int) -> int {
+    return value + 1;
+}
+
+async fn verify() -> null {
+    let value: int = await compute(41);
+    print("async value=${value}");
+    return null;
+}
+
+let task: task[null] = verify();
+"async example complete";

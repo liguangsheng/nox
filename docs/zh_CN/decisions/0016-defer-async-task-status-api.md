@@ -1,6 +1,6 @@
 # 0016 - 暂缓 async task 状态 API
 
-- 状态：已采纳
+- 状态：已采纳；async/await 升级路线已由 [0030 - 分阶段引入 async/await](0030-staged-async-await.md) 扩展
 - 日期：2026-05-22
 - 涉及：运行时 / 语言 / 嵌入 / 工具链
 
