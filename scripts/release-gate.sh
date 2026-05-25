@@ -191,6 +191,7 @@ if [ -n "$missing" ]; then
 fi
 '
 run_gate "release candidate readiness guard" scripts/release-candidate-readiness.sh
+run_gate "package and lockfile guardrail" scripts/package-guardrail.sh
 run_gate "release-prep version helper self-test" scripts/prepare-release-version.sh --self-test
 run_gate "release asset builder self-test" scripts/build-release-assets.sh --self-test
 run_gate "release asset manifest self-test" scripts/release-asset-manifest.sh --self-test

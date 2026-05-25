@@ -46,6 +46,13 @@ an embedding SDK for it until the C ABI has target-specific smoke evidence.
 Other targets are source-build-only or best-effort until their toolchain,
 artifact build, and smoke evidence are documented here.
 
+The `Platform CLI smoke` CI matrix covers Linux, macOS, and Windows with
+`scripts/cli-smoke.sh`. That job builds the host CLI and runs `nox --version`,
+`nox run examples/hello.nox`, and `nox check examples/hello.nox`. It is CLI-only
+evidence: it does not add required release assets, does not commit to an embed
+SDK on macOS or Windows, and does not replace target-specific C ABI smoke before
+a full SDK target is promised.
+
 To produce both tarballs and their `.sha256` sidecars in one step, run `scripts/build-release-assets.sh` after the release tag is pushed; it builds the release in an isolated git worktree on the tag and writes four files per full SDK target to `/tmp/nox-release-assets-<tag>/` ready for GitHub Release upload. Before that build, run `scripts/release-toolchain-status.sh` to confirm the local Rust targets required by the release asset manifest, especially the CLI-only `x86_64-unknown-linux-musl` target. Set `NOX_RELEASE_TAG=<tag>` when not passing the tag as an argument. Set `NOX_RELEASE_ASSET_DIR=/tmp/nox-release-assets-<tag>` when using a non-default output directory, and pass the same value to `scripts/release-upload-plan.sh` to print the exact `gh release upload <tag> <files...>` command after inspecting the assets. Run `scripts/release-asset-smoke.sh` against the same asset directory before upload, and again against downloaded GitHub Release assets if the release is repaired or mirrored. The smoke verifies each `.sha256`, extracts each tarball, runs host-compatible CLI assets against `examples/hello.nox`, and compiles the host-compatible embed C ABI package. By default `build-release-assets.sh` builds the current Rust host triple. Set `TARGET_TRIPLES="x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu ..."` only after the target toolchains and C ABI smoke coverage are available. Set `CLI_ONLY_TARGET_TRIPLES="x86_64-unknown-linux-musl"` to additionally produce CLI-only assets for CI-smoked targets whose embedding SDK is not committed yet. Use `TARGET_TRIPLES=""` when intentionally producing only CLI-only assets for a verification run. This is a required release step — releases without binary assets force downstream users to build from source.
 `scripts/release-asset-manifest.sh --json` prints the same required assets with
 machine-readable `kind`, `target`, `commitment`, and `c_abi_smoke_required`

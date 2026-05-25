@@ -18,6 +18,14 @@
   `nox.release-asset-manifest.v1` 的资产名称、target、commitment 和 C ABI smoke 要求。
 - 文档：新增中英文支持与安全政策，写清 supported versions、EOL、hotfix、withdrawn release、
   漏洞响应和 release train；release checklist 与文档索引同步链接该政策。
+- CI：新增 `Platform CLI smoke` matrix，在 Linux、macOS 和 Windows 上用 `scripts/cli-smoke.sh`
+  构建 host CLI 并运行 `--version`、`examples/hello.nox` 和 `check` smoke；该证据不扩大
+  macOS / Windows release asset 或 embed SDK 承诺。
+- 文档/工具：`nox.lock` schema、content hash、cache key、offline/cache miss 和 private-source
+  边界进入 package guardrail；GitHub/git package 路线继续不提供 registry、publish、search、账号
+  或中心撤回机制。
+- 文档：新增中英文 `v0.0.6 -> v0.0.7` 迁移指南，说明本轮稳定化 release 的兼容承诺、多平台
+  CLI smoke、lockfile 检查和无需迁移场景。
 
 ## [0.0.6] — 2026-05-25
 

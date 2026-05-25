@@ -83,6 +83,31 @@ jobs:
       - name: Build and smoke x86_64-unknown-linux-musl CLI
         run: scripts/cross-cli-smoke.sh
 
+  platform_cli:
+    name: Platform CLI smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install stable toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup override set stable
+      - name: Cargo cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-platform-cli-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+      - name: Build and smoke host CLI
+        shell: bash
+        run: scripts/cli-smoke.sh
+
   markdown_links:
     name: Markdown local link check
     runs-on: ubuntu-latest

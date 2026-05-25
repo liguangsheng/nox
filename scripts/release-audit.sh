@@ -173,6 +173,35 @@ else
     fail "PLAN 第 126/129 项: stability and support policy guardrail missing"
 fi
 
+if [ -x scripts/package-guardrail.sh ] \
+    && grep -q "package and lockfile guardrail" scripts/release-gate.sh \
+    && grep -q "nox.lock" docs/zh_CN/package-manifest-design.md \
+    && grep -q "不做自建 registry" docs/zh_CN/decisions/0026-github-git-module-ecosystem.md; then
+    pass "PLAN 第 133-135 项: package and lockfile guardrail wired"
+else
+    fail "PLAN 第 133-135 项: package and lockfile guardrail missing"
+fi
+
+if [ -x scripts/cli-smoke.sh ] \
+    && grep -q "Platform CLI smoke" .github/workflows/ci.yml \
+    && grep -q "macos-latest" .github/workflows/ci.yml \
+    && grep -q "windows-latest" .github/workflows/ci.yml \
+    && grep -q "Platform CLI smoke" docs/en/release-checklist.md \
+    && grep -q "Platform CLI smoke" docs/zh_CN/release-checklist.md; then
+    pass "PLAN 第 131-132 项: multi-platform CLI smoke wired"
+else
+    fail "PLAN 第 131-132 项: multi-platform CLI smoke missing"
+fi
+
+if [ -f docs/en/migration-v0.0.6-to-v0.0.7.md ] \
+    && [ -f docs/zh_CN/migration-v0.0.6-to-v0.0.7.md ] \
+    && grep -q "migration-v0.0.6-to-v0.0.7.md" docs/en/README.md \
+    && grep -q "migration-v0.0.6-to-v0.0.7.md" docs/zh_CN/README.md; then
+    pass "PLAN 第 136 项: v0.0.6 to v0.0.7 migration guide wired"
+else
+    fail "PLAN 第 136 项: v0.0.6 to v0.0.7 migration guide missing"
+fi
+
 if [ -x scripts/release-candidate-readiness.sh ] \
     && grep -q "release candidate readiness guard" scripts/release-gate.sh; then
     pass "PLAN 第 76 项: release candidate readiness guard wired"

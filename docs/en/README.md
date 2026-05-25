@@ -11,6 +11,7 @@ Start here:
 - [Runtime](runtime.md): permissions, standard library modules, and capability boundaries.
 - [Stability and compatibility](stability.md): stable, experimental, deferred, and internal public-surface boundaries.
 - [Support and security policy](support-policy.md): supported versions, EOL, hotfixes, withdrawn releases, and vulnerability response.
+- [v0.0.6 to v0.0.7 migration](migration-v0.0.6-to-v0.0.7.md): stabilization-release upgrade notes.
 - [Standard Library Index](stdlib-index.md): stdlib modules grouped by topic with stability tags.
 - [Embedding](embedding.md): Rust API, C ABI, host functions, ownership, and error handling.
 - [Diagnostics](diagnostics.md): stable machine-readable diagnostic codes.

@@ -40,6 +40,27 @@
 ## 非目标
 
 - 不新增 `aarch64`、macOS、Windows 或 musl embedding SDK 承诺。
+
+## 阶段 131 复审
+
+`v0.0.7` 只把多平台覆盖推进到 CLI smoke，不扩大 full SDK 或 C ABI 目标承诺。
+
+CI 增加 host CLI matrix：Linux、macOS 和 Windows 都构建 `nox` CLI，并运行
+`nox --version`、`nox run examples/hello.nox` 和 `nox check examples/hello.nox`。
+该 smoke 只证明 CLI 在目标 runner 上可构建和运行基础脚本；它不产出 release asset，
+不上传 GitHub Release，不承诺该平台的 embed SDK、动态库布局、C compiler、rpath 或 header
+兼容性。
+
+发布承诺仍保持：
+
+- `x86_64-unknown-linux-gnu`：full SDK release asset，包含 CLI 和 embed SDK。
+- `x86_64-unknown-linux-musl`：CLI-only release asset，继续由 cross CLI smoke 覆盖。
+- macOS / Windows：CI CLI smoke 起步；source build / best-effort CLI 运行证据，不进入
+  `v0.0.7` release asset 必需清单。
+
+若未来要把 macOS 或 Windows 升级为 release asset 承诺，必须先补 toolchain status、asset
+manifest、asset smoke、download repair smoke，以及 target-specific C ABI smoke（如果承诺
+embed SDK）。
 - 不让 build 脚本自动安装 toolchain、创建 tag、push、上传 GitHub Release 或修改 release notes。
 - 不改变 release asset 命名格式。
 - 不把内部 handoff 路线图纳入正式 release 文档。
