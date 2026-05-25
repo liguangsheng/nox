@@ -18,6 +18,11 @@ Nox releases must keep version identity and evidence aligned:
 - compatibility golden evidence for parser AST shape, CLI diagnostic JSON, LSP
   diagnostic JSON, `nox doc` output, project lockfile JSON, host-metadata API
   JSON, C ABI enum values, and async Rust API task behavior.
+- stability and support policy evidence for public-surface status, supported
+  versions, EOL, hotfixes, withdrawn releases, and vulnerability response.
+
+The support and security process is defined in
+[`support-policy.md`](support-policy.md).
 
 ## Current Checkpoint State
 
@@ -67,7 +72,7 @@ expected release-prep anchors without editing files. Run
 the same version switch in a temporary copy and verify cutover readiness plus
 release notes extraction without changing the current checkout.
 
-If a release must be withdrawn, keep the historical tag and release commit, mark the GitHub Release as withdrawn or deprecated, publish a hotfix version, and document the downstream upgrade path.
+If a release must be withdrawn, keep the historical tag and release commit, mark the GitHub Release as withdrawn or deprecated, publish a hotfix version, and document the downstream upgrade path. Follow the support and security policy for the affected-version window and vulnerability response.
 
 ## crates.io Preflight
 

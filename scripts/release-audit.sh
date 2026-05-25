@@ -86,7 +86,7 @@ else
     fail "missing remote CI evidence; set NOX_RELEASE_CI_EVIDENCE to the run URL/id after CI passes"
 fi
 
-if rg -g '!scripts/release-audit.sh' '\.agents|\]\([^)]*(GOAL|PLAN)\.md' README.md README_zh_CN.md docs/en docs/zh_CN examples/README.md tests/README.md scripts .github >/tmp/nox-release-audit-links.$$ 2>/dev/null; then
+if rg -g '!scripts/release-audit.sh' -g '!scripts/stability-guardrail.sh' '\.agents|\]\([^)]*(GOAL|PLAN)\.md' README.md README_zh_CN.md docs/en docs/zh_CN examples/README.md tests/README.md scripts .github >/tmp/nox-release-audit-links.$$ 2>/dev/null; then
     fail "formal surfaces link handoff files; see /tmp/nox-release-audit-links.$$"
 else
     rm -f /tmp/nox-release-audit-links.$$
@@ -162,6 +162,15 @@ if [ -x scripts/compatibility-golden.sh ] \
     pass "PLAN 第 75 项: compatibility golden regression bus wired"
 else
     fail "PLAN 第 75 项: compatibility golden regression bus missing"
+fi
+
+if [ -x scripts/stability-guardrail.sh ] \
+    && grep -q "stability and support policy guardrail" scripts/release-gate.sh \
+    && grep -q "support-policy.md" docs/en/README.md \
+    && grep -q "support-policy.md" docs/zh_CN/README.md; then
+    pass "PLAN 第 126/129 项: stability and support policy guardrail wired"
+else
+    fail "PLAN 第 126/129 项: stability and support policy guardrail missing"
 fi
 
 if [ -x scripts/release-candidate-readiness.sh ] \

@@ -6,6 +6,19 @@
 
 ## [未发布]
 
+- 文档：新增中英文稳定性与兼容承诺矩阵，明确 `v0.0.x` release 线中 Rust API、C ABI、
+  CLI JSON、diagnostic code、LSP diagnostics、语言语义、stdlib、release assets 和暂缓项的
+  稳定 / 实验 / 暂缓 / 内部边界，作为 `v0.0.7` 稳定化路线的第一步。
+- 工具：新增 `scripts/stability-guardrail.sh` 并接入 release gate / release audit /
+  release candidate readiness，检查稳定性矩阵、支持政策、文档索引和正式文档边界仍在位。
+- 工具：`scripts/release-candidate-readiness.sh` 不再硬编码旧的 `v0.0.4 -> v0.0.5`
+  候选版本流程；candidate 模式从当前 workspace patch 推导下一候选版本，cutover 模式仍可由
+  `NOX_RELEASE_CUTOVER_VERSION` 显式指定。
+- 工具：`scripts/compatibility-golden.sh` 新增 release asset manifest JSON golden，固定
+  `nox.release-asset-manifest.v1` 的资产名称、target、commitment 和 C ABI smoke 要求。
+- 文档：新增中英文支持与安全政策，写清 supported versions、EOL、hotfix、withdrawn release、
+  漏洞响应和 release train；release checklist 与文档索引同步链接该政策。
+
 ## [0.0.6] — 2026-05-25
 
 - 文档：ADR 0031 增加阶段 117 集成式 LSP 第六轮复评结论，继续不拆独立 LSP

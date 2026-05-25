@@ -30,29 +30,29 @@ require_file_contains_fixed() {
 workspace_version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
 mode=${NOX_RELEASE_READINESS_MODE:-auto}
 if [ "$mode" = "auto" ]; then
-    if [ "$workspace_version" = "0.0.4" ]; then
-        mode=candidate
-    else
-        mode=cutover
-    fi
+    mode=candidate
 fi
+workspace_version_re=$(printf '%s' "$workspace_version" | sed 's/\./\\./g')
+patch=${workspace_version##*.}
+next_patch=$((patch + 1))
+next_version="0.0.$next_patch"
 
 case "$mode" in
     candidate)
-        [ "$workspace_version" = "0.0.4" ] || fail "workspace version must stay 0.0.4 before release-prep commit, got $workspace_version"
-        require_file_contains_fixed crates/nox/Cargo.toml 'nox_core = { version = "0.0.4", path = "../nox_core" }' "exact nox_core dependency"
+        require_file_contains_fixed crates/nox/Cargo.toml "nox_core = { version = \"$workspace_version\", path = \"../nox_core\" }" "exact nox_core dependency"
 
-        require_file_contains README.md 'latest production release is `v0\.0\.4`' "English latest production release wording"
-        require_file_contains README_zh_CN.md '最新正式发布版本是 `v0\.0\.4`' "Chinese latest production release wording"
-        require_file_contains docs/en/README.md 'current production release is `v0\.0\.4`' "English docs production release wording"
-        require_file_contains docs/zh_CN/release-checklist.md '下一轮候选版本从 `v0\.0\.5` 开始' "next release candidate version"
+        require_file_contains README.md "latest production release is \`v$workspace_version_re\`" "English latest production release wording"
+        require_file_contains README_zh_CN.md "最新正式发布版本是 \`v$workspace_version_re\`" "Chinese latest production release wording"
+        require_file_contains docs/en/README.md "current production release is \`v$workspace_version_re\`" "English docs production release wording"
+        require_file_contains docs/zh_CN/release-checklist.md '下一轮候选版本从下一个 patch 版本开始' "next release candidate version"
         require_file_contains docs/zh_CN/release-checklist.md '`\[workspace\.package\]\.version` 仍是上一个已准备发布版本' "pre-release version identity rule"
         require_file_contains docs/en/release-checklist.md 'next release candidate starts at' "English next release candidate wording"
-        require_file_contains docs/en/release-checklist.md '`v0\.0\.5`, but candidate audits' "English next release candidate version"
+        require_file_contains docs/en/release-checklist.md 'next patch version' "English next release candidate version"
         require_file_contains docs/en/release-checklist.md 'keep `\[workspace\.package\]\.version` at' "English pre-release version identity wording"
         require_file_contains docs/en/release-checklist.md 'the previous prepared version' "English pre-release version identity rule"
 
         require_file_contains CHANGELOG.md '^## \[未发布\]' "unreleased changelog section"
+        printf 'release candidate readiness: candidate mode for v%s -> v%s\n' "$workspace_version" "$next_version"
         ;;
     cutover)
         expected_version=${NOX_RELEASE_CUTOVER_VERSION:-$workspace_version}
@@ -80,6 +80,7 @@ require_file_contains CHANGELOG.md '不引入 `throw` / `catch` / `finally`' "ex
 require_file_contains CHANGELOG.md 'source_map.*source_map_hash' "LSP generated source-map metadata changelog entry"
 require_file_contains CHANGELOG.md 'nox\.release-asset-manifest\.v1' "release asset manifest JSON changelog entry"
 require_file_contains CHANGELOG.md 'Release Asset Manifest JSON' "release evidence report manifest JSON changelog entry"
+require_file_contains CHANGELOG.md '稳定性与兼容承诺矩阵' "stability matrix changelog entry"
 
 require_file_contains docs/en/language-v0.md 'experimental static trait MVP' "English trait experimental status"
 require_file_contains docs/zh_CN/language-v0.md '当前 trait 能力是实验性的纯静态 MVP' "Chinese trait experimental status"
@@ -122,9 +123,24 @@ require_file_contains docs/en/release-checklist.md 'withdrawn|deprecated|hotfix'
 require_file_contains docs/zh_CN/release-checklist.md '撤回|hotfix|下游升级路径' "Chinese rollback terms"
 require_file_contains docs/en/release-checklist.md 'Publishing to crates.io is deferred' "English crates.io deferral"
 require_file_contains docs/zh_CN/release-checklist.md '暂缓 crates.io 发布' "Chinese crates.io deferral"
+require_file_contains docs/en/README.md 'support-policy\.md' "English support policy index link"
+require_file_contains docs/zh_CN/README.md 'support-policy\.md' "Chinese support policy index link"
+require_file_contains docs/en/support-policy.md 'Supported Versions' "English supported versions policy"
+require_file_contains docs/zh_CN/support-policy.md '支持版本' "Chinese supported versions policy"
+require_file_contains docs/en/support-policy.md 'Security Response' "English security response policy"
+require_file_contains docs/zh_CN/support-policy.md '漏洞响应' "Chinese security response policy"
+require_file_contains docs/en/support-policy.md 'EOL' "English EOL policy"
+require_file_contains docs/zh_CN/support-policy.md 'EOL' "Chinese EOL policy"
+require_file_contains docs/en/support-policy.md 'Hotfix' "English hotfix policy"
+require_file_contains docs/zh_CN/support-policy.md 'Hotfix' "Chinese hotfix policy"
+require_file_contains docs/en/support-policy.md 'Withdrawn Releases' "English withdrawn release policy"
+require_file_contains docs/zh_CN/support-policy.md '撤回 Release' "Chinese withdrawn release policy"
 
 require_file_contains scripts/release-gate.sh 'compatibility regression: machine-readable golden surfaces' "compatibility golden release gate"
 require_file_contains scripts/release-audit.sh 'PLAN 第 75 项: compatibility golden regression bus wired' "compatibility golden release audit"
+require_file_contains scripts/release-gate.sh 'stability and support policy guardrail' "stability/support release gate"
+require_file_contains scripts/release-audit.sh 'stability and support policy guardrail wired' "stability/support release audit"
+require_file_contains scripts/stability-guardrail.sh 'support-policy\.md' "stability/support guardrail script"
 
 standalone_lsp_hits=/tmp/nox-standalone-lsp-hits.$$
 if rg -n 'nox[-_]lsp|nox_language_server|language[-_]server.*package|lsp.*standalone' \

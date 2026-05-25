@@ -1,7 +1,11 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION=${NOX_RELEASE_VERSION:-0.0.5}
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+
+current_version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+VERSION=${NOX_RELEASE_VERSION:-$current_version}
 TAG=${NOX_RELEASE_TAG:-"v$VERSION"}
 
 usage() {

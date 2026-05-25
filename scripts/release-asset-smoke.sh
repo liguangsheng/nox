@@ -4,7 +4,8 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-VERSION=${NOX_RELEASE_VERSION:-0.0.5}
+current_version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+VERSION=${NOX_RELEASE_VERSION:-$current_version}
 TAG=${NOX_RELEASE_TAG:-"v$VERSION"}
 DIST=${NOX_RELEASE_ASSET_DIR:-"/tmp/nox-release-assets-$TAG"}
 CC=${CC:-cc}
@@ -22,7 +23,7 @@ GitHub Release assets. This script is read-only: it does not build assets,
 commit, tag, push, upload files, or call GitHub.
 
 Environment:
-  NOX_RELEASE_VERSION              expected CLI version, default 0.0.5
+  NOX_RELEASE_VERSION              expected CLI version, default current Cargo workspace version
   NOX_RELEASE_TAG                  expected tag, default v$NOX_RELEASE_VERSION
   NOX_RELEASE_ASSET_DIR            directory containing *.tar.gz and *.sha256
   NOX_RELEASE_ASSET_SMOKE_RUN      auto, always, or never; default auto

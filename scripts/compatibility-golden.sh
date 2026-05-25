@@ -179,4 +179,28 @@ assert functions["task_sleep"]["return_type"] == "task[null]"
 assert functions["task_ready"]["return_type"] == "bool"
 PY
 
+printf 'compatibility golden: release asset manifest JSON\n'
+NOX_RELEASE_VERSION=0.0.6 NOX_RELEASE_TAG=v0.0.6 scripts/release-asset-manifest.sh --json >"$tmp/asset-manifest.json"
+python3 - "$tmp/asset-manifest.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["schema"] == "nox.release-asset-manifest.v1"
+assert data["version"] == "0.0.6"
+assert data["tag"] == "v0.0.6"
+assets = data["assets"]
+assert [asset["name"] for asset in assets] == [
+    "nox-cli-v0.0.6-x86_64-unknown-linux-gnu",
+    "nox-embed-v0.0.6-x86_64-unknown-linux-gnu",
+    "nox-cli-v0.0.6-x86_64-unknown-linux-musl",
+]
+assert assets[0]["kind"] == "cli"
+assert assets[0]["commitment"] == "full-sdk"
+assert assets[0]["c_abi_smoke_required"] is False
+assert assets[1]["kind"] == "embed"
+assert assets[1]["commitment"] == "full-sdk"
+assert assets[1]["c_abi_smoke_required"] is True
+assert assets[2]["target"] == "x86_64-unknown-linux-musl"
+assert assets[2]["commitment"] == "cli-only"
+PY
+
 printf 'compatibility golden: ok\n'

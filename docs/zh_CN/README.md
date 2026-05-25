@@ -11,6 +11,8 @@
 - [Cookbook](cookbook.md)：项目、CLI 脚本、数据处理、HTTP、测试和嵌入的任务配方。
 - [诊断 code](diagnostics.md)：CLI JSON 和 LSP diagnostics 的机器可读 code 契约。
 - [运行时](runtime.md)：默认标准库、权限模型、文件加载、异步任务和取消执行。
+- [稳定性与兼容承诺](stability.md)：稳定、实验、暂缓和内部表面的边界矩阵。
+- [支持与安全政策](support-policy.md)：支持版本、EOL、hotfix、撤回 release 和漏洞响应。
 - [标准库索引](stdlib-index.md)：按主题归类的 stdlib 模块和稳定性标签。
 - [嵌入](embedding.md)：Rust API、C ABI、宿主函数、错误字符串和内存所有权。
 - [开发](development.md)：验证命令、测试分布和日常修改规则。

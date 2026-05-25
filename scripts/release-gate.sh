@@ -96,6 +96,7 @@ run_gate "compatibility regression: parser AST golden" cargo test -p nox_core pa
 run_gate "compatibility regression: C ABI enum values" cargo test -p nox_core c_abi_enum_values_are_stable --lib
 run_gate "compatibility regression: async Rust API" cargo test -p nox async_task_rust_api --lib
 run_gate "compatibility regression: machine-readable golden surfaces" scripts/compatibility-golden.sh
+run_gate "stability and support policy guardrail" scripts/stability-guardrail.sh
 
 # Host-friendliness guardrail (P8.5, PLAN 完成定义第 12 项前半).
 # embedding-regression covers Rust API/runtime tests, Rust embedding example,

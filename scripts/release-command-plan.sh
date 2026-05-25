@@ -4,8 +4,10 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-VERSION=${NOX_RELEASE_VERSION:-0.0.5}
-DATE=${NOX_RELEASE_DATE:-2026-05-24}
+current_version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+current_patch=${current_version##*.}
+VERSION=${NOX_RELEASE_VERSION:-0.0.$((current_patch + 1))}
+DATE=${NOX_RELEASE_DATE:-$(date +%F)}
 TAG=${NOX_RELEASE_TAG:-"v$VERSION"}
 DIST=${NOX_RELEASE_ASSET_DIR:-"/tmp/nox-release-assets-$TAG"}
 CI_EVIDENCE=${NOX_RELEASE_CI_EVIDENCE:-"<run-url-after-ci-passes>"}

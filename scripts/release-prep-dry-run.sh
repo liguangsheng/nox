@@ -4,8 +4,10 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-VERSION=${NOX_RELEASE_VERSION:-0.0.5}
-DATE=${NOX_RELEASE_DATE:-2026-05-24}
+current_for_default=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+current_patch_for_default=${current_for_default##*.}
+VERSION=${NOX_RELEASE_VERSION:-0.0.$((current_patch_for_default + 1))}
+DATE=${NOX_RELEASE_DATE:-$(date +%F)}
 
 usage() {
     cat >&2 <<'EOF'

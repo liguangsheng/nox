@@ -9,6 +9,8 @@ Start here:
 - [CLI](cli.md): command behavior, exit codes, and JSON output.
 - [Cookbook](cookbook.md): task recipes for projects, CLI scripts, data, HTTP, tests, and embedding.
 - [Runtime](runtime.md): permissions, standard library modules, and capability boundaries.
+- [Stability and compatibility](stability.md): stable, experimental, deferred, and internal public-surface boundaries.
+- [Support and security policy](support-policy.md): supported versions, EOL, hotfixes, withdrawn releases, and vulnerability response.
 - [Standard Library Index](stdlib-index.md): stdlib modules grouped by topic with stability tags.
 - [Embedding](embedding.md): Rust API, C ABI, host functions, ownership, and error handling.
 - [Diagnostics](diagnostics.md): stable machine-readable diagnostic codes.

@@ -79,6 +79,8 @@ checkpoint 状态下的缺失证据会被脚本识别出来。正式 production 
 - compatibility golden：显式覆盖 parser AST 形状、CLI diagnostic JSON、LSP diagnostic JSON、
   `nox doc` 输出、project lockfile JSON、host-metadata API JSON、C ABI enum 数值和 async
   Rust API task 行为。
+- stability / support policy guardrail：显式检查稳定性矩阵、支持版本、EOL、hotfix、撤回
+  release 和漏洞响应文档仍在正式表面中。
 - Cargo 集成测试覆盖 LSP builtin completion，确保 `map_get` 等内建函数可被发现；同时覆盖
   `nox.project-check.v1` 项目 JSON summary。
 - `scripts/embedding-regression.sh`，覆盖 Rust API、默认 runtime、Rust embedding 示例和
@@ -87,6 +89,9 @@ checkpoint 状态下的缺失证据会被脚本识别出来。正式 production 
 
 Benchmark smoke 只要求 case 成功和 tab-separated 输出格式稳定；数字用于同机前后对比，
 不作为硬阈值。
+
+支持版本、EOL、hotfix、撤回 release 和漏洞响应流程见
+[支持与安全政策](support-policy.md)。
 
 ## 准备 checklist
 
