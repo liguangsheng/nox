@@ -1,0 +1,170 @@
+export fn parse(value: str) -> result[json, str] {
+    return __nox_std_json_parse(value);
+}
+
+export fn stringify(value: json) -> str {
+    return __nox_std_json_stringify(value);
+}
+
+export fn kind(value: json) -> str {
+    return __nox_std_json_kind(value);
+}
+
+export fn array_len(value: json) -> result[int, str] {
+    return __nox_std_json_array_len(value);
+}
+
+export fn array_get(value: json, index: int) -> result[json, str] {
+    return __nox_std_json_array_get(value, index);
+}
+
+export fn object_has(value: json, key: str) -> result[bool, str] {
+    return __nox_std_json_object_has(value, key);
+}
+
+export fn object_get(value: json, key: str) -> result[json, str] {
+    return __nox_std_json_object_get(value, key);
+}
+
+export fn require_field(value: json, path: str, expected_kind: str) -> result[json, str] {
+    return __nox_std_json_require_field(value, path, expected_kind);
+}
+
+fn __json_join_path(base: str, field: str) -> str {
+    if (base == "") {
+        return field;
+    }
+    return base + "." + field;
+}
+
+fn __json_prefix_error(path: str, message: str) -> str {
+    if (path == "") {
+        return message;
+    }
+    return path + ": " + message;
+}
+
+fn __json_payload_or_null(value: json) -> result[json, str] {
+    let payload: result[json, str] = variant_payload(value);
+    match (payload) {
+        ok(found) => {
+            return ok(found);
+        }
+        err(_) => {
+            return parse("null");
+        }
+    }
+}
+
+export fn decode_record3<T>(value: json, path: str, field1: str, kind1: str, field2: str, kind2: str, field3: str, kind3: str, build: fn(json, json, json) -> result[T, str]) -> result[T, str] {
+    let value1: result[json, str] = require_field(value, __json_join_path(path, field1), kind1);
+    match (value1) {
+        ok(found1) => {
+            let value2: result[json, str] = require_field(value, __json_join_path(path, field2), kind2);
+            match (value2) {
+                ok(found2) => {
+                    let value3: result[json, str] = require_field(value, __json_join_path(path, field3), kind3);
+                    match (value3) {
+                        ok(found3) => {
+                            return build(found1, found2, found3);
+                        }
+                        err(message) => {
+                            return err(message);
+                        }
+                    }
+                }
+                err(message) => {
+                    return err(message);
+                }
+            }
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+export fn decode_adjacent_enum3<T>(value: json, path: str, variant1: str, build1: fn(json) -> result[T, str], variant2: str, build2: fn(json) -> result[T, str], variant3: str, build3: fn(json) -> result[T, str]) -> result[T, str] {
+    let name_result: result[str, str] = variant_name(value);
+    match (name_result) {
+        ok(name) => {
+            let payload_result: result[json, str] = __json_payload_or_null(value);
+            match (payload_result) {
+                ok(payload) => {
+                    if (name == variant1) {
+                        return build1(payload);
+                    }
+                    if (name == variant2) {
+                        return build2(payload);
+                    }
+                    if (name == variant3) {
+                        return build3(payload);
+                    }
+                    return err(__json_prefix_error(path, "unknown variant " + name));
+                }
+                err(message) => {
+                    return err(__json_prefix_error(path, message));
+                }
+            }
+        }
+        err(message) => {
+            return err(__json_prefix_error(path, message));
+        }
+    }
+}
+
+export fn validate_schema(value: json, required_fields: [str]) -> result[null, str] {
+    return __nox_std_json_validate_schema(value, required_fields);
+}
+
+export fn validate_object(value: json, required_fields: [str], allowed_fields: [str]) -> result[null, str] {
+    return __nox_std_json_validate_object(value, required_fields, allowed_fields);
+}
+
+export fn apply_defaults(value: json, defaults: json) -> result[json, str] {
+    return __nox_std_json_apply_defaults(value, defaults);
+}
+
+export fn apply_defaults_deep(value: json, defaults: json) -> result[json, str] {
+    return __nox_std_json_apply_defaults_deep(value, defaults);
+}
+
+export fn to_json<T>(value: T) -> json {
+    return __nox_std_json_to_json(value);
+}
+
+export fn from_json<T>(value: json) -> result[T, str] {
+    return __nox_std_json_from_json(value);
+}
+
+export fn variant_name(value: json) -> result[str, str] {
+    return __nox_std_json_variant_name(value);
+}
+
+export fn variant_payload(value: json) -> result[json, str] {
+    return __nox_std_json_variant_payload(value);
+}
+
+export fn as_int(value: json) -> result[int, str] {
+    return __nox_std_json_as_int(value);
+}
+
+export fn as_float(value: json) -> result[float, str] {
+    return __nox_std_json_as_float(value);
+}
+
+export fn as_str(value: json) -> result[str, str] {
+    return __nox_std_json_as_str(value);
+}
+
+export fn as_bool(value: json) -> result[bool, str] {
+    return __nox_std_json_as_bool(value);
+}
+
+export fn as_array(value: json) -> result[[json], str] {
+    return __nox_std_json_as_array(value);
+}
+
+export fn as_object(value: json) -> result[map[str, json], str] {
+    return __nox_std_json_as_object(value);
+}

@@ -14,6 +14,8 @@ import "std/string.nox" as string;
 import "std/json.nox" as json;
 import "std/jsonl.nox" as jsonl;
 import "std/hash.nox" as hash;
+import "std/yaml.nox" as yaml;
+import "std/xml.nox" as xml;
 ```
 
 Older global functions remain available as compatibility surface, but new code should prefer namespace imports.
@@ -68,11 +70,17 @@ computation modules for common data transformations. Most array and map helpers
 return copies, while the explicitly named mutation helpers are documented later
 in this page. Array higher-order helpers accept `fn(...) -> ...` function values
 or lambda literals; result and option helpers expose status checks, fallbacks,
-`map`, `map_err`, and `and_then` composition.
+lazy fallbacks, `option.ok_or`, `option.filter`, `map`, `result.map_or`,
+`map_err`, `and_then`, and `or_else` composition.
 `std/array.nox` also exports the experimental `Eq` trait plus
 `contains_equal<T: Eq>` and `dedupe_equal<T: Eq>`, while the older
 `contains_value<T: Equatable>` and `dedupe<T: Equatable>` helpers remain
 available.
+`std/traits.nox` is the small experimental trait core for code that wants trait
+abstractions without importing collection helpers. It exports `Eq`, `Display`,
+`equal<T: Eq>`, `not_equal<T: Eq>`, `display<T: Display>`, and
+`display_label<T: Display>` with built-in primitive impls, and it does not
+create a prelude or implicit import.
 
 `std/url.nox` provides pure URL helpers: `parse(url) -> result[(scheme, host, port,
 path, query), str]`, `build(scheme, host, port, path, query) -> str`, `query_encode`,
@@ -289,7 +297,32 @@ section name.
 It supports tables (`[package]`), dotted tables / keys, strings, booleans,
 numbers, and arrays of supported scalar values. It intentionally rejects TOML
 features outside that subset, including datetime values and arrays of tables.
-YAML remains deferred; use JSON, TOML, INI, or dotenv for configuration data.
+
+`std/yaml.nox` provides an experimental minimum reader:
+`parse(source) -> result[json, str]`. It supports one document, indentation-based
+mappings, scalar sequences, inline arrays, quoted strings, booleans, finite
+numbers, null values, and comments. Anchors, aliases, tags, flow mappings,
+multi-document streams, block scalars, and schema-specific YAML coercions remain
+unsupported and return `result.err` for malformed structure.
+
+`std/xml.nox` is pure computation for safe XML text generation. It exposes
+`validate_name(name) -> result[str, str]`, `escape_text(value) -> str`,
+`escape_attr(value) -> str`, `unescape_text(value) -> str`,
+`comment(value) -> result[str, str]`, `text_element(name, value) -> result[str, str]`,
+`attr(name, value) -> result[str, str]`, `attrs(values) -> result[str, str]`,
+`qname(prefix, local) -> result[str, str]`, `xmlns(prefix, uri) -> result[str, str]`,
+`xmlns_default(uri) -> result[str, str]`, `empty_element(name, attrs) -> result[str, str]`,
+`text_element_attrs(name, attrs, value) -> result[str, str]`,
+`empty_element_ns(prefix, local, attrs) -> result[str, str]`, and
+`text_element_ns(prefix, local, attrs, value) -> result[str, str]`. The helpers
+validate element/attribute names and namespace prefix/local-name text before
+constructing tags. `comment` rejects `--` and trailing `-` content. These helpers
+do not parse XML documents, resolve namespace scopes, validate schemas, or
+stream large documents.
+
+Compression/archive formats, protobuf, SQLite/database drivers, and HTTPS/TLS
+remain deferred. They either need larger dependencies, runtime capabilities, or
+mock/error-model work that does not fit the current conservative stdlib surface.
 
 `std/test.nox` ships assertion helpers for `nox test` scripts:
 `assert_eq<T: Equatable>(actual, expected, label) -> null`,
@@ -333,8 +366,16 @@ task[null]` creates an awaitable sleep task for `async fn` bodies,
 `wait(id) -> bool` blocks until the task completes (or forever for an unknown
 id), `wait_or_timeout(id, timeout_ms) -> bool` blocks up to the timeout and
 cancels the task on expiration returning `false`, and `pending_count() -> int`
-exposes the current outstanding task count. All entries require the `async
-task` capability.
+exposes the current outstanding task count. `delay<T>(ms, value) -> task[T]`
+waits on a sleep task and then returns `value`; `join2<T, U>(left, right) ->
+task[(T, U)]` and `join3<T, U, V>(first, second, third) -> task[(T, U, V)]`
+await already-created task values and return tuples. `map<T, U>(value, f) ->
+task[U]` awaits an already-created task and applies `f`; `and_then<T, U>(value,
+f) -> task[U]` awaits an already-created task, calls `f`, and awaits the task it
+returns. The sleep/id helpers and `delay` require the `async task` capability
+because they create or inspect the runtime sleep task table. `join2`, `join3`,
+`map`, and `and_then` do not create runtime tasks by themselves; they only await
+the tasks their caller passes in or that their callback returns.
 `RuntimePermissions::async_task_max_pending` defaults to `Some(1024)` and makes
 `task_sleep_ms` and `task_sleep` / `task.sleep` fail with
 `runtime.task-pending-cap` before creating a new task when the current pending
@@ -349,6 +390,13 @@ If an `async fn` fails after creating awaitable sleep tasks, top-level
 tasks that existed before the call. Diagnostics raised at an awaitable task
 boundary retain both host and script stack frames.
 The C ABI does not expose runtime task handles in this stage.
+The staged async boundary keeps this model deliberately small: no IO
+reactor, multithread runtime, top-level await, async traits, language-level
+cancellation tokens, generic `select` / `race`, or C ABI task handles are part
+of the current runtime surface. Additional `std/task.nox` helpers must keep
+composing already-created tasks and reuse the same permissions, pending-task
+cap, cleanup rules, trace events, mocks, and diagnostics instead of adding a
+background scheduler.
 
 `std/http.nox` provides a minimal HTTP/1.1 client over plain TCP. The simple
 helpers `get(url, timeout_ms)` and `post(url, body, timeout_ms)` return

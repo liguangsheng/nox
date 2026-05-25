@@ -17,6 +17,6 @@ Start here:
 - [Benchmarks](benchmarks.md): benchmark smoke workflow.
 - [Directory structure](directory-structure.md): repository layout and file ownership.
 
-The current production release is `v0.0.5`. Release notes are recorded in [`../../CHANGELOG.md`](../../CHANGELOG.md).
+The current production release is `v0.0.6`. Release notes are recorded in [`../../CHANGELOG.md`](../../CHANGELOG.md).
 
 Detailed design notes and ADRs are currently maintained in Chinese under [`../zh_CN`](../zh_CN/README.md). English pages document the supported public surface and link back to the corresponding Chinese deep-dive pages where useful.

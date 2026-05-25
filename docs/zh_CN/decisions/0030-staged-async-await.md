@@ -79,6 +79,88 @@ Nox 采用分阶段 async/await 路线：
 - 消费后释放 payload 和 task entry。
 - 未消费 completed task 受 pending/completed 总量上限约束，避免泄漏。
 
+## 第二阶段边界
+
+阶段 80 复审后，async runtime 第二阶段继续保持单 runtime、单线程、显式权限模型。下一批只接受
+不扩大调度器承诺的 helper：
+
+- `std/task.nox` 第二阶段实现 `delay<T>`、`join2<T, U>` 和 `join3<T, U, V>`：
+  等待两个或三个已创建的 `task[T]` 并返回 tuple，或先等待 sleep task 再返回给定值。
+- 这类 helper 不新增 runtime task kind；`task_sleep` / `task_sleep_ms` 仍是唯一内建
+  runtime task 来源。
+- 组合 helper 不引入隐式 `async_tasks`、filesystem、network、environment、timer 或 process
+  权限；权限仍由创建底层 task 或调用对应 stdlib helper 的位置决定。
+- `RuntimePermissions::async_task_max_pending` 继续只统计 runtime task 表中的 pending sleep
+  task。只组合已有 task 的 helper 不增加 pending 计数；会创建 sleep task 的 helper 必须复用同一上限
+  和 `runtime.task-pending-cap`。
+- trace 继续复用已有 runtime task event；profile / coverage 仍按 VM bytecode 和 stdlib helper 源码
+  统计，不新增 scheduler 专用事件模型。
+- LSP、`nox doc` 和 completion 只暴露普通 stdlib 函数签名，不把调度器状态、task table 或
+  source map 作为 IDE 协议表面。
+
+第二阶段继续拒绝或暂缓这些能力：
+
+- IO reactor、epoll/kqueue/io_uring、真正非阻塞 filesystem/network/process IO。
+- 多线程 runtime、work stealing、跨 runtime await。
+- `select` / `race` / structured concurrency 语法，直到有稳定的 task status、取消和 payload
+  生命周期设计。
+- cancellation token 作为语言值；现有 `task_cancel(id)` 仍只面向 sleep-task id。
+- async trait method、top-level await 和 C ABI task handle。
+
+因此阶段 81 的实现应是 stdlib 与文档收敛，不是 runtime 架构替换。若未来重启 reactor、通用
+`select` 或 C ABI task handle，必须另开 ADR，先定义权限传播、资源上限、mock、trace/profile/
+coverage、错误模型、handle ownership 和回滚策略。
+
+## 第三阶段边界
+
+阶段 93 复审后，async runtime 第三阶段继续选择源码级 stdlib 组合，而不是调度器扩容。阶段 94
+只接受这类 helper：
+
+- `std/task.nox` 增加 `map<T, U>(value: task[T], f: fn(T) -> U) -> task[U]` 和
+  `and_then<T, U>(value: task[T], f: fn(T) -> task[U]) -> task[U]`。
+- 两个 helper 都是普通 `async fn`：先 await 调用方传入的 task，再执行函数值；`and_then` 再 await
+  函数返回的 task。
+- helper 本身不创建 runtime task kind，不占用 pending sleep-task 表，也不引入新的权限。权限仍由
+  创建底层 task 的 helper 决定，例如 `task.delay` / `task.sleep` 仍需要 `async_tasks`。
+- 这批 helper 复用现有 cleanup、mock、diagnostic、trace/profile/coverage 语义，不增加后台
+  scheduler、task group 或新的取消生命周期。
+
+第三阶段继续拒绝或暂缓：
+
+- IO reactor、多线程 runtime、work stealing、跨 runtime await。
+- async trait、top-level await、C ABI task handle。
+- cancellation token、structured concurrency、通用 `select` / `race`。
+- 隐式 filesystem、network、environment、timer、process 或 async task 权限。
+
+## 第四阶段边界
+
+阶段 111 复审后，async/await 继续保持单 runtime、单线程、显式权限、无 IO reactor 的模型。阶段
+112 的实现必须优先补生产证据，而不是扩大调度器承诺：
+
+- 首选补取消与资源释放回归：证明 await 失败、permission denied、resource cap、host callback
+  失败和普通诊断路径都会清理本次 eval/test 创建的 awaitable sleep task。
+- 允许增加只读或诊断型 helper，例如 `std/task.nox` 中报告 pending task 状态的纯 wrapper，前提是
+  不暴露可跨 runtime 持有的 task handle，不改变 payload 生命周期，不绕过 `async_tasks` 权限。
+- 允许增强 CLI/LSP/doc parity，例如 async diagnostic code、hover/signature、stdlib index 和 examples
+  的一致性检查。
+- 如果补 `timeout` / `race` / `select`，第一步只能是源码级 `async fn` helper，且必须清楚说明未完成
+  分支是否继续运行、是否取消、何时释放 payload；在这些语义未闭合前不得加入稳定 stdlib 表面。
+- `task.delay` / `task.sleep` 仍是唯一内建 awaitable runtime task 来源；fs/http 的 async wrapper
+  仍只是 blocking host call 包在 `async fn` 外壳里，不代表真实非阻塞 IO。
+
+第四阶段继续拒绝或暂缓：
+
+- IO reactor、epoll/kqueue/io_uring、真正非阻塞 filesystem/network/process IO。
+- 多线程 runtime、work stealing、跨 runtime await。
+- 语言级 `select` / `race` / structured concurrency。
+- cancellation token 作为语言值，或自动向用户 callback 注入取消上下文。
+- async trait、top-level await、C ABI task handle。
+- 隐式 filesystem、network、environment、timer、process 或 async task 权限。
+
+因此阶段 112 应优先选择一个可验证的安全闭环，例如 awaitable task 清理/取消传播回归、async
+diagnostic parity 或 stdlib/doc surface 守卫；不应把完整 async runtime、reactor、top-level await
+或 C ABI task handle 混入同一批次。
+
 ## Typechecker 与错误传播
 
 `async fn` 与 `?` 的关系保持简单：

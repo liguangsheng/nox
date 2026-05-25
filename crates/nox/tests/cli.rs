@@ -55,6 +55,10 @@ fn lsp_position(source: &str, byte_offset: usize) -> (usize, usize) {
 fn run_prints_final_value() {
     for (path, expected) in [
         ("examples/arrays.nox", "40\n"),
+        (
+            "examples/async.nox",
+            "async value=42\nasync mapped=20 chained-5\nasync example complete\n",
+        ),
         ("examples/bitwise.nox", "bitwise-ok\n"),
         ("tests/benchmarks/bench-containers.nox", "containers-ok\n"),
         ("tests/benchmarks/bench-fib.nox", "fib-ok\n"),
@@ -2064,7 +2068,7 @@ fn project_check_json_reports_manifest_boundary_and_steps() {
         assert!(stdout.contains(&format!("\"root\":\"{}\"", project_root.display())));
         assert!(stdout.contains("\"package\":{\"name\":\"scoreboard\",\"version\":\"0.0.3\"}"));
         assert!(stdout.contains(
-            "\"schema_validation\":{\"ok\":true,\"manifest_sections\":[\"package\",\"entrypoints\",\"modules\",\"dependencies\",\"runtime\"],\"unknown_sections\":\"rejected\",\"unknown_keys\":\"rejected\"}"
+            "\"schema_validation\":{\"ok\":true,\"manifest_sections\":[\"package\",\"entrypoints\",\"modules\",\"dependencies\",\"runtime\",\"codegen\"],\"unknown_sections\":\"rejected\",\"unknown_keys\":\"rejected\"}"
         ));
         assert!(stdout.contains(&format!(
             "\"entrypoints\":{{\"main\":\"{}\",\"named\":[",
@@ -2073,6 +2077,7 @@ fn project_check_json_reports_manifest_boundary_and_steps() {
         assert!(stdout.contains("\"capabilities\":{\"declared\":[]}"));
         assert!(stdout.contains("\"dependencies\":{\"declared\":[],\"lockfile\":{"));
         assert!(stdout.contains("\"ok\":true,\"status\":\"not_required\",\"diagnostics\":[]"));
+        assert!(stdout.contains("\"codegen\":{\"ok\":true,\"artifacts\":[],\"diagnostics\":[]"));
         assert!(stdout.contains(&format!(
             "\"module_graph\":{{\"roots\":[\"{}\"],\"files\":[",
             project_root.join("src").display()
@@ -2094,6 +2099,165 @@ fn project_check_json_reports_manifest_boundary_and_steps() {
         assert!(stdout.contains("\"summary\":{\"steps\":3,\"passed\":3,\"failed\":0}"));
         assert!(stdout.contains("\\\"name\\\":\\\"test_manifest_present\\\""));
     }
+}
+
+#[test]
+fn project_check_json_reports_codegen_metadata() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-project-check-codegen-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("schemas")).unwrap();
+    fs::create_dir_all(dir.join("tools")).unwrap();
+    fs::write(
+        dir.join("nox.toml"),
+        r#"[package]
+name = "project-codegen"
+version = "0.0.1"
+
+[entrypoints]
+main = "src/generated.nox"
+
+[modules]
+source_dirs = ["src"]
+
+[codegen]
+api = { generated = "src/generated.nox", generator = "tools/gen-api", template = "schemas/api.tpl", input_hash = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", source_map = "src/generated.nox.map", source_map_hash = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", command = "tools/gen-api schemas/api.tpl > src/generated.nox" }
+"#,
+    )
+    .unwrap();
+    fs::write(dir.join("src/generated.nox"), "1;\n").unwrap();
+    fs::write(dir.join("src/generated.nox.map"), "{}\n").unwrap();
+    fs::write(dir.join("schemas/api.tpl"), "template\n").unwrap();
+    fs::write(dir.join("tools/gen-api"), "#!/bin/sh\n").unwrap();
+
+    let output = nox_command()
+        .current_dir(&dir)
+        .args(["project", "check", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"codegen\":{\"ok\":true,\"artifacts\":["));
+    assert!(stdout.contains(&format!(
+        "\"name\":\"api\",\"generated\":\"{}\",\"exists\":true",
+        dir.join("src/generated.nox").display()
+    )));
+    assert!(stdout.contains("\"generator\":\"tools/gen-api\""));
+    assert!(stdout.contains(&format!(
+        "\"template\":\"{}\"",
+        dir.join("schemas/api.tpl").display()
+    )));
+    assert!(stdout.contains(
+        "\"input_hash\":\"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\""
+    ));
+    assert!(stdout.contains(&format!(
+        "\"source_map\":\"{}\",\"source_map_exists\":true",
+        dir.join("src/generated.nox.map").display()
+    )));
+    assert!(stdout.contains(
+        "\"source_map_hash\":\"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\""
+    ));
+    assert!(stdout.contains("\"command\":\"tools/gen-api schemas/api.tpl > src/generated.nox\""));
+    assert!(stdout.contains("\"diagnostics\":[]"));
+}
+
+#[test]
+fn project_check_json_rejects_missing_codegen_source_map() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-project-check-codegen-source-map-missing-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("nox.toml"),
+        r#"[package]
+name = "project-codegen"
+version = "0.0.1"
+
+[modules]
+source_dirs = ["src"]
+
+[codegen]
+api = { generated = "src/generated.nox", source_map = "src/generated.nox.map", source_map_hash = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }
+"#,
+    )
+    .unwrap();
+    fs::write(dir.join("src/generated.nox"), "1;\n").unwrap();
+
+    let output = nox_command()
+        .current_dir(&dir)
+        .args(["project", "check", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"ok\":false"), "{stdout}");
+    assert!(stdout.contains("\"codegen\":{\"ok\":false,\"artifacts\":["));
+    assert!(stdout.contains(&format!(
+        "\"source_map\":\"{}\",\"source_map_exists\":false",
+        dir.join("src/generated.nox.map").display()
+    )));
+    assert!(stdout.contains(
+        "\"source_map_hash\":\"sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\""
+    ));
+    assert!(stdout.contains("\"code\":\"manifest.invalid\""));
+    assert!(stdout.contains("source map"));
+    assert!(stdout.contains("declared by codegen artifact"));
+}
+
+#[test]
+fn project_check_json_rejects_missing_codegen_generated_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-project-check-codegen-missing-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::write(
+        dir.join("nox.toml"),
+        r#"[package]
+name = "project-codegen"
+version = "0.0.1"
+
+[modules]
+source_dirs = ["src"]
+
+[codegen]
+api = { generated = "src/generated.nox", generator = "tools/gen-api" }
+"#,
+    )
+    .unwrap();
+    fs::write(dir.join("src/main.nox"), "1;\n").unwrap();
+
+    let output = nox_command()
+        .current_dir(&dir)
+        .args(["project", "check", "--json"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"ok\":false"), "{stdout}");
+    assert!(stdout.contains("\"codegen\":{\"ok\":false,\"artifacts\":["));
+    assert!(stdout.contains(&format!(
+        "\"name\":\"api\",\"generated\":\"{}\",\"exists\":false",
+        dir.join("src/generated.nox").display()
+    )));
+    assert!(stdout.contains("\"code\":\"manifest.invalid\""));
+    assert!(stdout.contains("declared by codegen artifact"));
 }
 
 #[test]
@@ -2292,6 +2456,181 @@ dep = {{ git = "file://{}", tag = "v0.1.0" }}
         String::from_utf8_lossy(&check.stderr)
     );
     assert!(String::from_utf8_lossy(&check.stdout).contains("\"status\":\"ok\""));
+}
+
+#[test]
+fn fetch_check_and_locked_validate_without_rewriting_lockfile() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-fetch-check-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let remote = create_local_bare_git_dependency(&dir);
+    let project = dir.join("project");
+    let cache = dir.join("cache");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("nox.toml"),
+        format!(
+            "[package]\nname = \"fetch-demo\"\nversion = \"0.0.1\"\n\n[dependencies]\ndep = {{ git = \"file://{}\", tag = \"v0.1.0\" }}\n",
+            remote.display()
+        ),
+    )
+    .unwrap();
+
+    let fetch = nox_command()
+        .current_dir(&project)
+        .args(["fetch", "--cache-dir", cache.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(fetch.status.success());
+    let lock_path = project.join("nox.lock");
+    let original = fs::read_to_string(&lock_path).unwrap();
+
+    let check = nox_command()
+        .current_dir(&project)
+        .args([
+            "fetch",
+            "--check",
+            "--offline",
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        check.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&check.stdout),
+        String::from_utf8_lossy(&check.stderr)
+    );
+    assert!(String::from_utf8_lossy(&check.stdout).contains("fetch: lockfile ok"));
+    assert_eq!(fs::read_to_string(&lock_path).unwrap(), original);
+
+    let locked = nox_command()
+        .current_dir(&project)
+        .args([
+            "fetch",
+            "--locked",
+            "--offline",
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        locked.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&locked.stdout),
+        String::from_utf8_lossy(&locked.stderr)
+    );
+    assert!(String::from_utf8_lossy(&locked.stdout).contains("fetch: lockfile ok"));
+    assert_eq!(fs::read_to_string(&lock_path).unwrap(), original);
+}
+
+#[test]
+fn fetch_check_reports_stale_lockfile_without_rewriting() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-fetch-check-stale-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let remote = create_local_bare_git_dependency(&dir);
+    let project = dir.join("project");
+    let cache = dir.join("cache");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("nox.toml"),
+        format!(
+            "[package]\nname = \"fetch-demo\"\nversion = \"0.0.1\"\n\n[dependencies]\ndep = {{ git = \"file://{}\", tag = \"v0.1.0\" }}\n",
+            remote.display()
+        ),
+    )
+    .unwrap();
+
+    let fetch = nox_command()
+        .current_dir(&project)
+        .args(["fetch", "--cache-dir", cache.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(fetch.status.success());
+    let lock_path = project.join("nox.lock");
+    let lockfile = fs::read_to_string(&lock_path).unwrap();
+    let stale = lockfile
+        .lines()
+        .map(|line| {
+            if line.starts_with("content_hash = ") {
+                "content_hash = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\""
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&lock_path, stale.clone()).unwrap();
+
+    let check = nox_command()
+        .current_dir(&project)
+        .args([
+            "fetch",
+            "--check",
+            "--offline",
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(check.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&check.stderr).contains("content hash does not match"));
+    assert_eq!(fs::read_to_string(&lock_path).unwrap(), stale);
+}
+
+#[test]
+fn fetch_locked_rejects_missing_lockfile_without_writing() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-cli-fetch-locked-missing-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    let remote = create_local_bare_git_dependency(&dir);
+    let project = dir.join("project");
+    let cache = dir.join("cache");
+    fs::create_dir_all(&project).unwrap();
+    fs::write(
+        project.join("nox.toml"),
+        format!(
+            "[package]\nname = \"fetch-demo\"\nversion = \"0.0.1\"\n\n[dependencies]\ndep = {{ git = \"file://{}\", tag = \"v0.1.0\" }}\n",
+            remote.display()
+        ),
+    )
+    .unwrap();
+
+    let fetch = nox_command()
+        .current_dir(&project)
+        .args(["fetch", "--cache-dir", cache.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(fetch.status.success());
+    let lock_path = project.join("nox.lock");
+    fs::remove_file(&lock_path).unwrap();
+
+    let locked = nox_command()
+        .current_dir(&project)
+        .args([
+            "fetch",
+            "--locked",
+            "--offline",
+            "--cache-dir",
+            cache.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(locked.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&locked.stderr).contains("nox.lock is required"));
+    assert!(!lock_path.exists());
 }
 
 #[test]
@@ -4599,6 +4938,49 @@ fn lsp_completion_includes_std_module_members() {
 }
 
 #[test]
+fn lsp_completion_includes_std_task_combinators() {
+    let source = "import \"std/task.nox\" as task;\n\ntask.sleep(0);\n";
+    let input = [
+        lsp_frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///std-task-main.nox","languageId":"nox","version":1,"text":"{}"}}}}}}"#,
+            json_escape(source)
+        )),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///std-task-main.nox"},"position":{"line":2,"character":5}}}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#),
+    ]
+    .join("");
+
+    let mut child = nox_command()
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"diagnostics\":[]"), "{stdout}");
+    let completion = stdout
+        .split("\"id\":2")
+        .nth(1)
+        .expect("std task completion response should be present");
+    assert!(completion.contains("\"label\":\"sleep\""), "{stdout}");
+    assert!(completion.contains("\"label\":\"delay\""), "{stdout}");
+    assert!(completion.contains("\"label\":\"join2\""), "{stdout}");
+    assert!(completion.contains("\"label\":\"join3\""), "{stdout}");
+}
+
+#[test]
 fn lsp_completion_includes_trait_and_record_methods() {
     let source = "trait Display {\n    fn to_str(self: Self) -> str;\n}\n\nrecord User {\n    name: str,\n}\n\nimpl Display for User {\n    fn to_str(self: User) -> str {\n        return self.name;\n    }\n}\n\nfn label(self: User) -> str {\n    return self.name;\n}\n\nlet user: User = User { name: \"Ada\" };\nuser.";
     let input = [
@@ -4910,6 +5292,172 @@ fn lsp_hover_returns_expression_type() {
 }
 
 #[test]
+fn lsp_hover_marks_manifest_codegen_generated_source() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-lsp-codegen-hover-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("schemas")).unwrap();
+    fs::write(
+        dir.join("nox.toml"),
+        r#"[package]
+name = "generated-hover"
+version = "0.0.1"
+
+[modules]
+source_dirs = ["src"]
+
+[codegen]
+api = { generated = "src/generated.nox", generator = "tools/gen-api", template = "schemas/api.tpl", input_hash = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", command = "tools/gen-api schemas/api.tpl > src/generated.nox" }
+"#,
+    )
+    .unwrap();
+    let source = "let value: int = 42;\nvalue;\n";
+    let generated = dir.join("src/generated.nox");
+    fs::write(&generated, source).unwrap();
+    fs::write(dir.join("schemas/api.tpl"), "template\n").unwrap();
+    let uri = format!("file://{}", generated.display());
+    let root_uri = format!("file://{}", dir.display());
+    let input = [
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"rootUri":"{}"}}}}"#,
+            json_escape(&root_uri)
+        )),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"nox","version":1,"text":"{}"}}}}}}"#,
+            json_escape(&uri),
+            json_escape(source)
+        )),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{}"}},"position":{{"line":1,"character":1}}}}}}"#,
+            json_escape(&uri)
+        )),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#),
+    ]
+    .join("");
+
+    let mut child = nox_command()
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"id\":2"), "{stdout}");
+    assert!(
+        stdout.contains("\"value\":\"int\\n\\ngenerated source"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("artifact: api"), "{stdout}");
+    assert!(stdout.contains("generator: tools/gen-api"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "template: {}",
+            dir.join("schemas/api.tpl").display()
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("input_hash: sha256:dddd"), "{stdout}");
+    assert!(!stdout.contains("source_map:"), "{stdout}");
+    assert!(!stdout.contains("source_map_hash:"), "{stdout}");
+}
+
+#[test]
+fn lsp_hover_marks_manifest_codegen_source_map_metadata() {
+    let dir = std::env::temp_dir().join(format!(
+        "nox-lsp-codegen-source-map-hover-{}-{}",
+        std::process::id(),
+        line!()
+    ));
+    fs::create_dir_all(dir.join("src")).unwrap();
+    fs::create_dir_all(dir.join("schemas")).unwrap();
+    fs::write(
+        dir.join("nox.toml"),
+        r#"[package]
+name = "generated-hover"
+version = "0.0.1"
+
+[modules]
+source_dirs = ["src"]
+
+[codegen]
+api = { generated = "src/generated.nox", generator = "tools/gen-api", template = "schemas/api.tpl", input_hash = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", source_map = "src/generated.nox.map", source_map_hash = "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", command = "tools/gen-api schemas/api.tpl > src/generated.nox" }
+"#,
+    )
+    .unwrap();
+    let source = "let value: int = 42;\nvalue;\n";
+    let generated = dir.join("src/generated.nox");
+    fs::write(&generated, source).unwrap();
+    fs::write(dir.join("src/generated.nox.map"), "{}\n").unwrap();
+    fs::write(dir.join("schemas/api.tpl"), "template\n").unwrap();
+    let uri = format!("file://{}", generated.display());
+    let root_uri = format!("file://{}", dir.display());
+    let input = [
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"rootUri":"{}"}}}}"#,
+            json_escape(&root_uri)
+        )),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"nox","version":1,"text":"{}"}}}}}}"#,
+            json_escape(&uri),
+            json_escape(source)
+        )),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"{}"}},"position":{{"line":1,"character":1}}}}}}"#,
+            json_escape(&uri)
+        )),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#),
+    ]
+    .join("");
+
+    let mut child = nox_command()
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"id\":2"), "{stdout}");
+    assert!(
+        stdout.contains("\"value\":\"int\\n\\ngenerated source"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("artifact: api"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "source_map: {}",
+            dir.join("src/generated.nox.map").display()
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("source_map_hash: sha256:eeee"), "{stdout}");
+}
+
+#[test]
 fn lsp_hover_and_signature_show_async_call_return() {
     let source = "/// Computes asynchronously.\nasync fn compute(value: int) -> int {\n    return value + 1;\n}\nlet task: task[int] = compute(41);\n";
     let hover_offset = source.rfind("compute").unwrap();
@@ -4968,6 +5516,68 @@ fn lsp_hover_and_signature_show_async_call_return() {
     assert!(
         signature.contains("async fn compute(value: int) -\\u003e int (task[int])")
             || signature.contains("async fn compute(value: int) -> int (task[int])"),
+        "{stdout}"
+    );
+}
+
+#[test]
+fn lsp_hover_and_signature_show_trait_bounds_on_generic_functions() {
+    let source = "trait Display {\n    fn to_str(self: Self) -> str;\n}\n\nrecord User {\n    name: str,\n}\n\nimpl Display for User {\n    fn to_str(self: User) -> str {\n        return self.name;\n    }\n}\n\nfn label<T: Display>(value: T) -> str {\n    return value.to_str();\n}\n\nlet user: User = User { name: \"Ada\" };\nlabel(user);\n";
+    let hover_offset = source.rfind("label").unwrap();
+    let (hover_line, hover_character) = lsp_position(source, hover_offset);
+    let signature_offset = source.rfind("user").unwrap();
+    let (signature_line, signature_character) = lsp_position(source, signature_offset);
+    let input = [
+        lsp_frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///trait-hover.nox","languageId":"nox","version":1,"text":"{}"}}}}}}"#,
+            json_escape(source)
+        )),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{{"textDocument":{{"uri":"file:///trait-hover.nox"}},"position":{{"line":{hover_line},"character":{hover_character}}}}}}}"#
+        )),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","id":3,"method":"textDocument/signatureHelp","params":{{"textDocument":{{"uri":"file:///trait-hover.nox"}},"position":{{"line":{signature_line},"character":{signature_character}}}}}}}"#
+        )),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#),
+    ]
+    .join("");
+
+    let mut child = nox_command()
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let hover = stdout
+        .split("\"id\":2")
+        .nth(1)
+        .expect("trait hover response should be present");
+    assert!(hover.contains("str"), "{stdout}");
+    assert!(
+        hover.contains("fn label<T: Display>(value: T) -\\u003e str")
+            || hover.contains("fn label<T: Display>(value: T) -> str"),
+        "{stdout}"
+    );
+    let signature = stdout
+        .split("\"id\":3")
+        .nth(1)
+        .expect("trait signature response should be present");
+    assert!(
+        signature.contains("fn label<T: Display>(value: T) -\\u003e str")
+            || signature.contains("fn label<T: Display>(value: T) -> str"),
         "{stdout}"
     );
 }
@@ -5146,6 +5756,58 @@ fn lsp_document_symbol_returns_top_level_declarations() {
     assert!(
         stdout.contains("\"name\":\"value\",\"kind\":13"),
         "{stdout}"
+    );
+}
+
+#[test]
+fn lsp_semantic_tokens_returns_lexical_tokens() {
+    let source = r#"// comment
+export async fn answer(value: int) -> result[int, str] {
+    const limit: int = 42;
+    return ok(limit);
+}
+"#;
+    let input = [
+        lsp_frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///semantic.nox","languageId":"nox","version":1,"text":"{}"}}}}}}"#,
+            json_escape(source)
+        )),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///semantic.nox"}}}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#),
+    ]
+    .join("");
+
+    let mut child = nox_command()
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("\"semanticTokensProvider\""), "{stdout}");
+    assert!(
+        stdout.contains("\"tokenTypes\":[\"namespace\",\"type\",\"function\",\"variable\",\"keyword\",\"string\",\"number\",\"comment\"]"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\"id\":2,\"result\":{\"data\":"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\"data\":[0,0,10,7,0"),
+        "expected first semantic token to classify the line comment: {stdout}"
     );
 }
 
@@ -5813,8 +6475,60 @@ fn lsp_code_action_returns_source_action() {
 
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"codeActionProvider\":true"), "{stdout}");
+    assert!(stdout.contains("\"codeActionProvider\""), "{stdout}");
+    assert!(stdout.contains("\"source.fixAll.nox\""), "{stdout}");
+    assert!(stdout.contains("\"source.format.nox\""), "{stdout}");
     assert!(stdout.contains("Run nox check"), "{stdout}");
+    assert!(stdout.contains("Format document"), "{stdout}");
+}
+
+#[test]
+fn lsp_code_action_removes_todo_marker_with_precise_edit() {
+    let source =
+        "fn answer() -> int {\n    // TODO replace with real implementation\n    return 42;\n}\n";
+    let input = [
+        lsp_frame(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#),
+        lsp_frame(&format!(
+            r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file:///todo-action.nox","languageId":"nox","version":1,"text":"{}"}}}}}}"#,
+            json_escape(source)
+        )),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"file:///todo-action.nox"},"range":{"start":{"line":1,"character":7},"end":{"line":1,"character":11}},"context":{"diagnostics":[]}}}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#),
+        lsp_frame(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#),
+    ]
+    .join("");
+
+    let mut child = nox_command()
+        .arg("lsp")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    drop(child.stdin.take());
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("\"title\":\"Remove TODO marker\""),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\"kind\":\"quickfix\""), "{stdout}");
+    assert!(
+        stdout.contains(
+            "\"range\":{\"start\":{\"line\":1,\"character\":7},\"end\":{\"line\":1,\"character\":11}}"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\"newText\":\"\""), "{stdout}");
+    assert!(stdout.contains("Run nox check"), "{stdout}");
+    assert!(stdout.contains("Format document"), "{stdout}");
 }
 
 #[test]

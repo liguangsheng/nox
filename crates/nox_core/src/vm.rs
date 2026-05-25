@@ -786,6 +786,7 @@ impl Vm {
                 Instruction::TraitMethodCall {
                     method_name,
                     dispatch,
+                    fallback_function,
                     arg_count,
                     span,
                 } => {
@@ -797,6 +798,17 @@ impl Vm {
                     let receiver = stack.pop().ok_or_else(|| {
                         Diagnostic::new("internal bytecode stack underflow", *span)
                     })?;
+                    let mut call_args = Vec::with_capacity(args.len() + 1);
+                    call_args.push(receiver.clone());
+                    call_args.extend(args);
+                    if let Some(function_name) = fallback_function {
+                        if let Some(callee) = env.get(function_name) {
+                            if record_method_fallback_matches(&callee, &receiver) {
+                                stack.push(self.call_value(*span, callee, call_args)?);
+                                continue;
+                            }
+                        }
+                    }
                     let function_name =
                         resolve_trait_method_dispatch(method_name, dispatch, &receiver, *span)?;
                     let callee = env.get(function_name).ok_or_else(|| {
@@ -806,9 +818,6 @@ impl Vm {
                         )
                         .with_code("trait.method-not-found")
                     })?;
-                    let mut call_args = Vec::with_capacity(args.len() + 1);
-                    call_args.push(receiver);
-                    call_args.extend(args);
                     stack.push(self.call_value(*span, callee, call_args)?);
                 }
                 Instruction::JsonDecode {
@@ -1571,6 +1580,16 @@ fn resolve_trait_method_dispatch<'a>(
         .with_code("trait.method-ambiguous"));
     }
     Ok(function_name)
+}
+
+fn record_method_fallback_matches(callee: &Value, receiver: &Value) -> bool {
+    let Value::Function(function) = callee else {
+        return false;
+    };
+    function
+        .params
+        .first()
+        .is_some_and(|param| param.ty == value_type(receiver))
 }
 
 pub(crate) fn flat_instruction_span(instruction: &Instruction) -> Span {

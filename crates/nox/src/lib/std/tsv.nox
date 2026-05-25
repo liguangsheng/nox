@@ -1,0 +1,15 @@
+export fn parse_line(value: str) -> result[[str], str] {
+    return __nox_std_tsv_parse_line(value);
+}
+
+export fn format_row(values: [str]) -> result[str, str] {
+    return __nox_std_tsv_format_row(values);
+}
+
+export fn parse_rows(value: str) -> result[[[str]], str] {
+    return __nox_std_tsv_parse_rows(value);
+}
+
+export fn format_rows(values: [[str]]) -> result[str, str] {
+    return __nox_std_tsv_format_rows(values);
+}

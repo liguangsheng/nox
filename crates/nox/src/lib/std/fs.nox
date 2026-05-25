@@ -1,0 +1,79 @@
+export fn read_text(path: str) -> str {
+    return __nox_std_fs_read_text(path);
+}
+
+export fn try_read_text(path: str) -> result[str, str] {
+    return __nox_std_fs_try_read_text(path);
+}
+
+export async fn read_text_async(path: str) -> str {
+    return read_text(path);
+}
+
+export async fn try_read_text_async(path: str) -> result[str, str] {
+    return try_read_text(path);
+}
+
+export fn exists(path: str) -> bool {
+    return __nox_std_fs_exists(path);
+}
+
+export async fn exists_async(path: str) -> bool {
+    return exists(path);
+}
+
+export fn is_file(path: str) -> bool {
+    return __nox_std_fs_is_file(path);
+}
+
+export async fn is_file_async(path: str) -> bool {
+    return is_file(path);
+}
+
+export fn is_dir(path: str) -> bool {
+    return __nox_std_fs_is_dir(path);
+}
+
+export async fn is_dir_async(path: str) -> bool {
+    return is_dir(path);
+}
+
+export fn list_dir(path: str) -> result[[str], str] {
+    return __nox_std_fs_list_dir(path);
+}
+
+export async fn list_dir_async(path: str) -> result[[str], str] {
+    return list_dir(path);
+}
+
+export fn write_text(path: str, contents: str) -> null {
+    return __nox_std_fs_write_text(path, contents);
+}
+
+export async fn write_text_async(path: str, contents: str) -> null {
+    return write_text(path, contents);
+}
+
+export fn read_binary(path: str) -> result[[int], str] {
+    return __nox_std_fs_read_binary(path);
+}
+
+export async fn read_binary_async(path: str) -> result[[int], str] {
+    return read_binary(path);
+}
+
+export fn write_binary(path: str, bytes: [int]) -> result[null, str] {
+    return __nox_std_fs_write_binary(path, bytes);
+}
+
+export async fn write_binary_async(path: str, bytes: [int]) -> result[null, str] {
+    return write_binary(path, bytes);
+}
+
+export fn canonicalize(path: str) -> result[str, str] {
+    return __nox_std_fs_canonicalize(path);
+}
+
+export async fn canonicalize_async(path: str) -> result[str, str] {
+    return canonicalize(path);
+}

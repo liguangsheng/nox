@@ -332,13 +332,6 @@ impl TypeChecker {
     }
 
     fn collect_impls(&mut self, statements: &[Stmt]) -> Result<(), Diagnostic> {
-        let top_level_functions = statements
-            .iter()
-            .filter_map(|statement| match statement {
-                Stmt::Function { name, span, .. } => Some((name.as_str(), *span)),
-                _ => None,
-            })
-            .collect::<HashMap<_, _>>();
         for statement in statements {
             let Stmt::Impl {
                 trait_name,
@@ -383,16 +376,6 @@ impl TypeChecker {
             }
             let mut method_map = HashMap::new();
             for method in methods {
-                if top_level_functions.contains_key(method.name.as_str()) {
-                    return Err(Diagnostic::new(
-                        format!(
-                            "impl method '{}' conflicts with a top-level function",
-                            method.name
-                        ),
-                        method.span,
-                    )
-                    .with_code("trait.method-ambiguous"));
-                }
                 let params = method
                     .params
                     .iter()
@@ -2123,6 +2106,16 @@ impl TypeChecker {
             .with_code("record.method-not-found"));
         };
         let Some(first_param) = params.first() else {
+            if self.has_trait_method_candidate(&receiver_type, name) {
+                return self.check_trait_method_call(
+                    span,
+                    &receiver_type,
+                    name,
+                    name_span,
+                    args,
+                    paren_span,
+                );
+            }
             return Err(Diagnostic::new(
                 format!("method '{name}' must accept {record_name} as its first parameter"),
                 name_span,
@@ -2130,6 +2123,16 @@ impl TypeChecker {
             .with_code("record.method-not-found"));
         };
         if first_param != &receiver_type {
+            if self.has_trait_method_candidate(&receiver_type, name) {
+                return self.check_trait_method_call(
+                    span,
+                    &receiver_type,
+                    name,
+                    name_span,
+                    args,
+                    paren_span,
+                );
+            }
             return Err(Diagnostic::new(
                 format!("method '{name}' first parameter must be {record_name}, got {first_param}"),
                 receiver.span,
@@ -2233,6 +2236,22 @@ impl TypeChecker {
                 .filter(|((_, target), _)| target == &other.to_string())
                 .filter_map(|(_, schema)| schema.methods.get(name).cloned())
                 .collect(),
+        }
+    }
+
+    fn has_trait_method_candidate(&self, receiver_type: &Type, name: &str) -> bool {
+        match receiver_type {
+            Type::Generic(param) => self
+                .active_trait_bounds
+                .last()
+                .and_then(|active| active.get(param))
+                .into_iter()
+                .flatten()
+                .filter_map(|trait_name| self.traits.get(trait_name))
+                .any(|schema| schema.methods.contains_key(name)),
+            other => self.impls.iter().any(|((_, target), schema)| {
+                target == &other.to_string() && schema.methods.contains_key(name)
+            }),
         }
     }
 
@@ -2397,6 +2416,9 @@ impl TypeChecker {
             Type::Option(value) => self
                 .concrete_expected_type(value)
                 .map(|value| Type::Option(Box::new(value))),
+            Type::Task(value) => self
+                .concrete_expected_type(value)
+                .map(|value| Type::Task(Box::new(value))),
             Type::Result { ok, err } => Some(Type::Result {
                 ok: Box::new(self.concrete_expected_type(ok)?),
                 err: Box::new(self.concrete_expected_type(err)?),
@@ -2547,6 +2569,12 @@ impl TypeChecker {
             },
             Type::Option(expected) => match actual {
                 Type::Option(actual) => {
+                    self.unify_call_type(expected, actual, type_params, span, bindings)
+                }
+                _ => self.expect_type(expected, actual, span),
+            },
+            Type::Task(expected) => match actual {
+                Type::Task(actual) => {
                     self.unify_call_type(expected, actual, type_params, span, bindings)
                 }
                 _ => self.expect_type(expected, actual, span),

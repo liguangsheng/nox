@@ -1,0 +1,3 @@
+export fn parse(source: str) -> result[map[str, str], str] {
+    return __nox_std_dotenv_parse(source);
+}

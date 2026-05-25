@@ -229,17 +229,23 @@ fn label<T: Display>(value: T) -> str {
 ```
 
 当前 trait 能力是实验性的纯静态 MVP：不支持 `interface` 别名、动态 dispatch、trait object、
-blanket impl、associated type 或 higher-kinded type。impl method 会编译为内部 mangled 函数名，
-并按 receiver nominal type 分派，因此不同类型可以实现同名 trait method。源码级顶层函数仍是
-普通 record method 糖的入口，所以 impl method 暂时不能与顶层函数同名；此类冲突使用
-`trait.method-ambiguous`。
+blanket impl、generic impl、associated type 或 higher-kinded type。impl method 会编译为内部
+mangled 函数名，并按 receiver nominal type 分派，因此不同类型可以实现同名 trait method。
+源码级顶层函数仍是普通 record method 糖的入口；当顶层函数第一个参数匹配 receiver 时，
+record-style method 保持优先，否则 concrete receiver 可以使用同名的唯一 trait impl method。
+
+method lookup 保持保守：record-style method 和 namespace member 在唯一命中时优先；之后才查找
+receiver concrete type 上的唯一 trait impl，或泛型 receiver 的 trait bound 中的唯一 method。
+trait / record 候选冲突时拒绝，不根据返回类型猜测。
 
 标准库第一批 trait 落点是 `std/array.nox` 的 `Eq` trait，以及
-`contains_equal<T: Eq>` / `dedupe_equal<T: Eq>`。`Eq` 内置实现覆盖
-`null`、`bool`、`int`、`float` 和 `str`；用户 record/enum 可在直接导入
-`std/array.nox` 后实现同一个 `Eq`，再复用这些 helper。旧的
-`contains_value<T: Equatable>` / `dedupe<T: Equatable>` 继续保留，作为内建 marker
-兼容层。
+`contains_equal<T: Eq>` / `dedupe_equal<T: Eq>`。第三轮 trait 表面新增实验性
+`std/traits.nox` 小核心，导出 `Eq`、`Display`、`equal<T: Eq>` 和
+`display<T: Display>`。基础 primitive 的内置 impl 覆盖 `null`、`bool`、`int`、
+`float` 和 `str`；用户 record/enum 可在直接导入定义 trait 的模块后实现同一个 trait。
+旧的 `contains_value<T: Equatable>` / `dedupe<T: Equatable>` 继续保留，作为内建 marker
+兼容层。长期边界见
+[0027 - 静态 trait 系统路线](decisions/0027-static-trait-system.md)。
 
 Nox 没有隐式类型转换。声明、运算符、条件、函数参数和返回值都要求类型精确匹配。
 
@@ -693,13 +699,17 @@ fail-fast 边界，避免制造误导性二次错误。
 无隐式权限、无 async trait、无 top-level await；脚本最终值如果是未消费的 task，会产生
 `async.top-level-task` 诊断。`async fn f() -> result[T, E]` 或
 `async fn f() -> option[T]` 内部的后缀 `?` 按声明的 payload `result` / `option`
-返回类型传播，语义与同步函数一致；runtime diagnostic 仍不会被转换成 `err` 或 `none`。
+返回类型传播，语义与同步函数一致；runtime diagnostic 仍不会被转换成 `err` 或 `none`。泛型
+函数调用可以从 `task[T]` 参数推断 payload 类型，例如 `fn identity<T>(value: task[T]) ->
+task[T]` 能直接接受 `task[int]`。
 
 ## v0 暂不支持
 
 v0 不包含异常、通用 package registry、宏、完整 async runtime、Unicode escape、泛型 record、
 泛型 trait、trait object、动态 dispatch、C 风格 `for`、切片语法、iterator protocol
-或跨 C ABI 的稳定 function handle。宏系统暂缓依据见
+或跨 C ABI 的稳定 function handle。类似宏的重复目前应通过函数、trait、stdlib helper 或显式
+外部 codegen 解决；生成后的 `.nox` 文件按普通源码进入 `nox check` / `nox test` / LSP /
+release gate。宏系统暂缓依据见
 [0029 - 暂缓宏系统，优先使用函数、trait 与外部 codegen](decisions/0029-defer-macro-system.md)；
 async/await 后续路线见
 [0030 - 分阶段引入 async/await](decisions/0030-staged-async-await.md)。

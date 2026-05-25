@@ -1,0 +1,87 @@
+export fn sleep_ms(ms: int) -> null {
+    return __nox_std_time_sleep_ms(ms);
+}
+
+export fn now_unix() -> int {
+    return __nox_std_time_now_unix();
+}
+
+export fn now_unix_ms() -> int {
+    return __nox_std_time_now_unix_ms();
+}
+
+export fn duration_ms(start: int, end: int) -> int {
+    return __nox_std_time_duration_ms(start, end);
+}
+
+export fn format_unix(ts: int, fmt: str) -> str {
+    return __nox_std_time_format_unix(ts, fmt);
+}
+
+export fn parse_unix(value: str, fmt: str) -> result[int, str] {
+    return __nox_std_time_parse_unix(value, fmt);
+}
+
+export fn from_seconds(seconds: int) -> int {
+    return seconds * 1000;
+}
+
+export fn from_minutes(minutes: int) -> int {
+    return minutes * 60000;
+}
+
+export fn from_hours(hours: int) -> int {
+    return hours * 3600000;
+}
+
+export fn to_seconds(ms: int) -> int {
+    return ms / 1000;
+}
+
+export fn to_minutes(ms: int) -> int {
+    return ms / 60000;
+}
+
+export fn to_hours(ms: int) -> int {
+    return ms / 3600000;
+}
+
+export fn iso8601_format(unix_seconds: int) -> str {
+    return __nox_std_time_iso8601_format(unix_seconds);
+}
+
+export fn iso8601_parse(value: str) -> result[int, str] {
+    return __nox_std_time_iso8601_parse(value);
+}
+
+export fn add_days(unix_seconds: int, days: int) -> int {
+    return unix_seconds + days * 86400;
+}
+
+export fn add_months(unix_seconds: int, months: int) -> int {
+    return __nox_std_time_add_months(unix_seconds, months);
+}
+
+export fn year_of(unix_seconds: int) -> int {
+    return __nox_std_time_year_of(unix_seconds);
+}
+
+export fn month_of(unix_seconds: int) -> int {
+    return __nox_std_time_month_of(unix_seconds);
+}
+
+export fn day_of(unix_seconds: int) -> int {
+    return __nox_std_time_day_of(unix_seconds);
+}
+
+export fn weekday_of(unix_seconds: int) -> int {
+    return __nox_std_time_weekday_of(unix_seconds);
+}
+
+export fn deadline_ms(timeout_ms: int) -> int {
+    return __nox_std_time_now_unix_ms() + timeout_ms;
+}
+
+export fn is_past_deadline_ms(deadline_ms: int) -> bool {
+    return __nox_std_time_now_unix_ms() >= deadline_ms;
+}

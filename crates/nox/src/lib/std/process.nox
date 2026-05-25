@@ -1,0 +1,23 @@
+export fn argv() -> [str] {
+    return __nox_std_process_argv();
+}
+
+export fn read_stdin() -> str {
+    return __nox_std_process_read_stdin();
+}
+
+export fn print_err(value: str) -> null {
+    return __nox_std_process_print_err(value);
+}
+
+export fn exit(code: int) -> null {
+    return __nox_std_process_exit(code);
+}
+
+export fn run(program: str, args: [str], stdin: str, timeout_ms: int) -> result[(int, str, str), str] {
+    return __nox_std_process_run(program, args, stdin, timeout_ms);
+}
+
+export fn run_with(program: str, args: [str], stdin: str, timeout_ms: int, cwd: str, env_pairs: [(str, str)]) -> result[(int, str, str), str] {
+    return __nox_std_process_run_with(program, args, stdin, timeout_ms, cwd, env_pairs);
+}

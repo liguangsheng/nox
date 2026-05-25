@@ -1,0 +1,83 @@
+export trait Eq {
+    fn equals(self: Self, other: Self) -> bool;
+}
+
+impl Eq for null {
+    fn equals(self: null, other: null) -> bool {
+        return self == other;
+    }
+}
+
+impl Eq for bool {
+    fn equals(self: bool, other: bool) -> bool {
+        return self == other;
+    }
+}
+
+impl Eq for int {
+    fn equals(self: int, other: int) -> bool {
+        return self == other;
+    }
+}
+
+impl Eq for float {
+    fn equals(self: float, other: float) -> bool {
+        return self == other;
+    }
+}
+
+impl Eq for str {
+    fn equals(self: str, other: str) -> bool {
+        return self == other;
+    }
+}
+
+export trait Display {
+    fn to_str(self: Self) -> str;
+}
+
+impl Display for null {
+    fn to_str(self: null) -> str {
+        return to_str_null(self);
+    }
+}
+
+impl Display for bool {
+    fn to_str(self: bool) -> str {
+        return to_str_bool(self);
+    }
+}
+
+impl Display for int {
+    fn to_str(self: int) -> str {
+        return to_str_int(self);
+    }
+}
+
+impl Display for float {
+    fn to_str(self: float) -> str {
+        return to_str_float(self);
+    }
+}
+
+impl Display for str {
+    fn to_str(self: str) -> str {
+        return to_str_str(self);
+    }
+}
+
+export fn equal<T: Eq>(left: T, right: T) -> bool {
+    return left.equals(right);
+}
+
+export fn not_equal<T: Eq>(left: T, right: T) -> bool {
+    return !left.equals(right);
+}
+
+export fn display<T: Display>(value: T) -> str {
+    return value.to_str();
+}
+
+export fn display_label<T: Display>(label: str, value: T) -> str {
+    return label + ": " + value.to_str();
+}

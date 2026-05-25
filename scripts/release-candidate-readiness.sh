@@ -55,7 +55,7 @@ case "$mode" in
         require_file_contains CHANGELOG.md '^## \[未发布\]' "unreleased changelog section"
         ;;
     cutover)
-        expected_version=${NOX_RELEASE_CUTOVER_VERSION:-0.0.5}
+        expected_version=${NOX_RELEASE_CUTOVER_VERSION:-$workspace_version}
         [ "$workspace_version" = "$expected_version" ] || fail "cutover workspace version must be $expected_version, got $workspace_version"
         version_re=$(printf '%s' "$workspace_version" | sed 's/\./\\./g')
         require_file_contains_fixed crates/nox/Cargo.toml "nox_core = { version = \"$workspace_version\", path = \"../nox_core\" }" "exact nox_core dependency"
@@ -77,6 +77,9 @@ require_file_contains CHANGELOG.md '静态 trait MVP' "trait MVP changelog entry
 require_file_contains CHANGELOG.md '不提供 IO reactor' "async staged-boundary changelog entry"
 require_file_contains CHANGELOG.md '暂缓内建宏系统' "macro deferral changelog entry"
 require_file_contains CHANGELOG.md '不引入 `throw` / `catch` / `finally`' "exception model deferral changelog entry"
+require_file_contains CHANGELOG.md 'source_map.*source_map_hash' "LSP generated source-map metadata changelog entry"
+require_file_contains CHANGELOG.md 'nox\.release-asset-manifest\.v1' "release asset manifest JSON changelog entry"
+require_file_contains CHANGELOG.md 'Release Asset Manifest JSON' "release evidence report manifest JSON changelog entry"
 
 require_file_contains docs/en/language-v0.md 'experimental static trait MVP' "English trait experimental status"
 require_file_contains docs/zh_CN/language-v0.md '当前 trait 能力是实验性的纯静态 MVP' "Chinese trait experimental status"
@@ -89,15 +92,32 @@ require_file_contains docs/zh_CN/diagnostics.md 'trait\.not-found` \| 实验' "C
 
 require_file_contains docs/en/language-v0.md 'does not expose `throw` / `catch` / `finally` exceptions' "English exception deferral"
 require_file_contains docs/zh_CN/language-v0.md '不提供用户可见的 `throw` / `catch` / `finally`' "Chinese exception deferral"
-require_file_contains docs/en/runtime.md 'YAML remains deferred' "English YAML deferral"
+require_file_contains docs/en/runtime.md '`std/yaml\.nox` provides an experimental minimum reader' "English YAML experimental boundary"
+require_file_contains docs/zh_CN/runtime.md '`std/yaml\.nox` \| `parse\(source: str\) -> result\[json, str\]` \| 无 \| 实验性最小 YAML reader' "Chinese YAML experimental boundary"
+require_file_contains docs/en/runtime.md 'Compression/archive formats, protobuf, SQLite/database drivers, and HTTPS/TLS' "English data-capability deferral"
+require_file_contains docs/zh_CN/runtime.md '压缩/归档格式、protobuf、SQLite/database driver 和 HTTPS/TLS 仍暂缓' "Chinese data-capability deferral"
 require_file_contains docs/zh_CN/runtime.md 'result / option 错误模型与 try block 暂缓' "Chinese try-block deferral"
 require_file_contains docs/zh_CN/decisions/0029-defer-macro-system.md 'Nox 暂缓内建宏系统' "macro deferral ADR"
 require_file_contains docs/zh_CN/decisions/0030-staged-async-await.md '无 IO reactor' "async staged ADR"
+require_file_contains docs/zh_CN/decisions/0031-integrated-lsp-fourth-round.md 'source_map.*source_map_hash' "LSP source-map metadata ADR"
+require_file_contains docs/zh_CN/decisions/0031-integrated-lsp-fourth-round.md '不开放跨文件 rename' "LSP no cross-file rename ADR"
+require_file_contains docs/zh_CN/decisions/0033-platform-distribution-third-round.md 'full SDK target 仍只有 `x86_64-unknown-linux-gnu`' "platform full SDK ADR"
+require_file_contains docs/zh_CN/decisions/0033-platform-distribution-third-round.md 'CLI-only target 仍只有 `x86_64-unknown-linux-musl`' "platform CLI-only ADR"
+require_file_contains docs/zh_CN/decisions/0034-production-evidence-third-round.md 'nox\.release-asset-manifest\.v1' "production evidence asset manifest ADR"
 
 require_file_contains scripts/build-release-assets.sh 'CLI_ONLY_TARGET_TRIPLES' "CLI-only release asset support"
 require_file_contains scripts/cross-cli-smoke.sh 'x86_64-unknown-linux-musl' "musl cross CLI smoke target"
+require_file_contains scripts/release-asset-smoke.sh 'release asset smoke' "release asset smoke script"
+require_file_contains scripts/release-asset-manifest.sh 'nox\.release-asset-manifest\.v1' "release asset manifest JSON schema"
+require_file_contains scripts/release-asset-manifest.sh 'c_abi_smoke_required' "release asset manifest C ABI smoke field"
+require_file_contains scripts/release-evidence-report.sh 'Release Asset Manifest JSON' "release evidence report asset manifest section"
+require_file_contains scripts/release-gate.sh 'release asset smoke self-test' "release asset smoke release gate"
 require_file_contains docs/en/release-checklist.md 'x86_64-unknown-linux-musl.*CLI-only' "English musl CLI-only release checklist"
 require_file_contains docs/zh_CN/release-checklist.md 'x86_64-unknown-linux-musl.*CLI-only' "Chinese musl CLI-only release checklist"
+require_file_contains docs/en/release-checklist.md 'c_abi_smoke_required' "English release asset manifest JSON checklist"
+require_file_contains docs/zh_CN/release-checklist.md 'c_abi_smoke_required' "Chinese release asset manifest JSON checklist"
+require_file_contains docs/en/release-checklist.md 'release-asset-smoke\.sh' "English release asset smoke checklist"
+require_file_contains docs/zh_CN/release-checklist.md 'release-asset-smoke\.sh' "Chinese release asset smoke checklist"
 require_file_contains docs/en/release-checklist.md 'withdrawn|deprecated|hotfix' "English rollback terms"
 require_file_contains docs/zh_CN/release-checklist.md '撤回|hotfix|下游升级路径' "Chinese rollback terms"
 require_file_contains docs/en/release-checklist.md 'Publishing to crates.io is deferred' "English crates.io deferral"

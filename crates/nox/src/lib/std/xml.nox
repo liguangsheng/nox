@@ -1,0 +1,228 @@
+import "std/string.nox" as string;
+import "std/map.nox" as map;
+
+fn __name_char_allowed(ch: str, first: bool) -> bool {
+    let start: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:";
+    let rest: str = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:-.0123456789";
+    if (first) {
+        return string.index_of(start, ch) >= 0;
+    }
+    return string.index_of(rest, ch) >= 0;
+}
+
+export fn validate_name(name: str) -> result[str, str] {
+    if (len(name) == 0) {
+        return err("XML name must not be empty");
+    }
+    let i: int = 0;
+    while (i < len(name)) {
+        let ch: str = string.substring(name, i, 1);
+        if (!__name_char_allowed(ch, i == 0)) {
+            return err("invalid XML name character at offset ${i}");
+        }
+        i = i + 1;
+    }
+    return ok(name);
+}
+
+export fn escape_text(value: str) -> str {
+    let out: str = string.replace(value, "&", "&amp;");
+    out = string.replace(out, "<", "&lt;");
+    out = string.replace(out, ">", "&gt;");
+    return out;
+}
+
+export fn escape_attr(value: str) -> str {
+    let out: str = escape_text(value);
+    out = string.replace(out, "\"", "&quot;");
+    out = string.replace(out, "'", "&apos;");
+    return out;
+}
+
+export fn unescape_text(value: str) -> str {
+    let out: str = string.replace(value, "&lt;", "<");
+    out = string.replace(out, "&gt;", ">");
+    out = string.replace(out, "&quot;", "\"");
+    out = string.replace(out, "&apos;", "'");
+    out = string.replace(out, "&amp;", "&");
+    return out;
+}
+
+export fn comment(value: str) -> result[str, str] {
+    if (string.contains(value, "--")) {
+        return err("XML comment must not contain '--'");
+    }
+    if (string.ends_with(value, "-")) {
+        return err("XML comment must not end with '-'");
+    }
+    return ok("<!--" + value + "-->");
+}
+
+export fn text_element(name: str, value: str) -> result[str, str] {
+    let checked: result[str, str] = validate_name(name);
+    match (checked) {
+        ok(valid) => {
+            return ok("<" + valid + ">" + escape_text(value) + "</" + valid + ">");
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+export fn attr(name: str, value: str) -> result[str, str] {
+    let checked: result[str, str] = validate_name(name);
+    match (checked) {
+        ok(valid) => {
+            return ok(valid + "=\"" + escape_attr(value) + "\"");
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+fn __validate_ncname(label: str, name: str, allow_empty: bool) -> result[str, str] {
+    if (len(name) == 0) {
+        if (allow_empty) {
+            return ok(name);
+        }
+        return err("XML " + label + " must not be empty");
+    }
+    if (string.contains(name, ":")) {
+        return err("XML " + label + " must not contain ':'");
+    }
+    let checked: result[str, str] = validate_name(name);
+    match (checked) {
+        ok(valid) => {
+            return ok(valid);
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+export fn qname(prefix: str, local: str) -> result[str, str] {
+    let checked_local: result[str, str] = __validate_ncname("local name", local, false);
+    match (checked_local) {
+        ok(valid_local) => {
+            let checked_prefix: result[str, str] = __validate_ncname("namespace prefix", prefix, true);
+            match (checked_prefix) {
+                ok(valid_prefix) => {
+                    if (len(valid_prefix) == 0) {
+                        return ok(valid_local);
+                    }
+                    return ok(valid_prefix + ":" + valid_local);
+                }
+                err(message) => {
+                    return err(message);
+                }
+            }
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+export fn xmlns(prefix: str, uri: str) -> result[str, str] {
+    let checked_prefix: result[str, str] = __validate_ncname("namespace prefix", prefix, false);
+    match (checked_prefix) {
+        ok(valid_prefix) => {
+            return ok("xmlns:" + valid_prefix + "=\"" + escape_attr(uri) + "\"");
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+export fn xmlns_default(uri: str) -> result[str, str] {
+    return ok("xmlns=\"" + escape_attr(uri) + "\"");
+}
+
+export fn attrs(values: map[str, str]) -> result[str, str] {
+    let out: str = "";
+    let entries: [(str, str)] = map.entries(values);
+    let i: int = 0;
+    while (i < len(entries)) {
+        let entry: (str, str) = entries[i];
+        let (name, value) = entry;
+        let rendered: result[str, str] = attr(name, value);
+        match (rendered) {
+            ok(text) => {
+                out = out + " " + text;
+            }
+            err(message) => {
+                return err(message);
+            }
+        }
+        i = i + 1;
+    }
+    return ok(out);
+}
+
+export fn empty_element(name: str, values: map[str, str]) -> result[str, str] {
+    let checked: result[str, str] = validate_name(name);
+    match (checked) {
+        ok(valid) => {
+            let rendered_attrs: result[str, str] = attrs(values);
+            match (rendered_attrs) {
+                ok(text) => {
+                    return ok("<" + valid + text + "/>");
+                }
+                err(message) => {
+                    return err(message);
+                }
+            }
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+export fn text_element_attrs(name: str, values: map[str, str], value: str) -> result[str, str] {
+    let checked: result[str, str] = validate_name(name);
+    match (checked) {
+        ok(valid) => {
+            let rendered_attrs: result[str, str] = attrs(values);
+            match (rendered_attrs) {
+                ok(text) => {
+                    return ok("<" + valid + text + ">" + escape_text(value) + "</" + valid + ">");
+                }
+                err(message) => {
+                    return err(message);
+                }
+            }
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+export fn empty_element_ns(prefix: str, local: str, values: map[str, str]) -> result[str, str] {
+    let name: result[str, str] = qname(prefix, local);
+    match (name) {
+        ok(valid) => {
+            return empty_element(valid, values);
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}
+
+export fn text_element_ns(prefix: str, local: str, values: map[str, str], value: str) -> result[str, str] {
+    let name: result[str, str] = qname(prefix, local);
+    match (name) {
+        ok(valid) => {
+            return text_element_attrs(valid, values, value);
+        }
+        err(message) => {
+            return err(message);
+        }
+    }
+}

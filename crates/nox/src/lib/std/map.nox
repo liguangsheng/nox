@@ -1,0 +1,39 @@
+export fn keys<T>(values: map[str, T]) -> [str] {
+    return map_keys(values);
+}
+
+export fn values<T>(values: map[str, T]) -> [T] {
+    return map_values(values);
+}
+
+export fn entries<T>(values: map[str, T]) -> [(str, T)] {
+    return __nox_std_map_entries(values);
+}
+
+export fn merge<T>(left: map[str, T], right: map[str, T]) -> map[str, T] {
+    return __nox_std_map_merge(left, right);
+}
+
+export fn remove_copy<T>(values: map[str, T], key: str) -> map[str, T] {
+    return __nox_std_map_remove_copy(values, key);
+}
+
+export fn get_or<T>(values: map[str, T], key: str, fallback: T) -> T {
+    let found: option[T] = map_get(values, key);
+    match (found) {
+        some(value) => {
+            return value;
+        }
+        none => {
+            return fallback;
+        }
+    }
+}
+
+export fn set<T>(values: map[str, T], key: str, value: T) -> null {
+    return __nox_std_map_set(values, key, value);
+}
+
+export fn delete<T>(values: map[str, T], key: str) -> bool {
+    return __nox_std_map_delete(values, key);
+}

@@ -1,0 +1,55 @@
+export fn sleep_ms(ms: int) -> int {
+    return task_sleep_ms(ms);
+}
+
+export fn sleep(ms: int) -> task[null] {
+    return task_sleep(ms);
+}
+
+export fn is_ready(id: int) -> bool {
+    return task_ready(id);
+}
+
+export fn cancel(id: int) -> null {
+    return task_cancel(id);
+}
+
+export fn wait(id: int) -> bool {
+    return task_join(id, 0);
+}
+
+export fn wait_or_timeout(id: int, timeout_ms: int) -> bool {
+    return task_join(id, timeout_ms);
+}
+
+export fn pending_count() -> int {
+    return task_pending_count();
+}
+
+export async fn delay<T>(ms: int, value: T) -> T {
+    await task_sleep(ms);
+    return value;
+}
+
+export async fn join2<T, U>(left: task[T], right: task[U]) -> (T, U) {
+    let left_value: T = await left;
+    let right_value: U = await right;
+    return (left_value, right_value);
+}
+
+export async fn join3<T, U, V>(first: task[T], second: task[U], third: task[V]) -> (T, U, V) {
+    let first_value: T = await first;
+    let second_value: U = await second;
+    let third_value: V = await third;
+    return (first_value, second_value, third_value);
+}
+
+export async fn map<T, U>(value: task[T], f: fn(T) -> U) -> U {
+    let resolved: T = await value;
+    return f(resolved);
+}
+
+export async fn and_then<T, U>(value: task[T], f: fn(T) -> task[U]) -> U {
+    let resolved: T = await value;
+    return await f(resolved);
+}

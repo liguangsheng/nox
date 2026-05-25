@@ -20,6 +20,10 @@ is_ci_evidence() {
     esac
 }
 
+is_release_version() {
+    printf '%s\n' "$1" | grep -Eq '^0\.0\.(0|[1-9][0-9]*)$'
+}
+
 require_asset() {
     base=$1
     file="$DIST/$base.tar.gz"
@@ -57,7 +61,7 @@ TAG=${NOX_RELEASE_TAG:-"v$VERSION"}
 CI_EVIDENCE=${NOX_RELEASE_CI_EVIDENCE:-}
 DIST=${NOX_RELEASE_ASSET_DIR:-"/tmp/nox-release-assets-$TAG"}
 
-[ "$VERSION" = "0.0.5" ] || fail "expected release cutover version 0.0.5, got $VERSION"
+is_release_version "$VERSION" || fail "expected release cutover version 0.0.x, got $VERSION"
 
 if git diff --quiet -- . ':!target'; then
     ok "worktree source diff is clean"

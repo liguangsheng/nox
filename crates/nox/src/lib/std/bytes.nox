@@ -1,0 +1,39 @@
+export fn encode_utf8(text: str) -> [int] {
+    return __nox_std_bytes_encode_utf8(text);
+}
+
+export fn decode_utf8(values: [int]) -> result[str, str] {
+    return __nox_std_bytes_decode_utf8(values);
+}
+
+export fn len(values: [int]) -> int {
+    return __nox_std_bytes_len(values);
+}
+
+export fn get(values: [int], index: int) -> result[int, str] {
+    return __nox_std_bytes_get(values, index);
+}
+
+export fn slice_copy(values: [int], start: int, length: int) -> result[[int], str] {
+    return __nox_std_bytes_slice_copy(values, start, length);
+}
+
+export fn equal(left: [int], right: [int]) -> bool {
+    return __nox_std_bytes_equal(left, right);
+}
+
+export fn base64_encode(values: [int]) -> str {
+    return __nox_std_bytes_base64_encode(values);
+}
+
+export fn base64_decode(value: str) -> result[[int], str] {
+    return __nox_std_bytes_base64_decode(value);
+}
+
+export fn hex_encode(values: [int]) -> str {
+    return __nox_std_bytes_hex_encode(values);
+}
+
+export fn hex_decode(value: str) -> result[[int], str] {
+    return __nox_std_bytes_hex_decode(value);
+}

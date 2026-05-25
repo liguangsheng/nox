@@ -1,0 +1,11 @@
+export fn next_int(seed: int, min: int, max: int) -> (int, int) {
+    return __nox_std_random_next_int(seed, min, max);
+}
+
+export fn next_bool(seed: int) -> (int, bool) {
+    return __nox_std_random_next_bool(seed);
+}
+
+export fn next_float_unit(seed: int) -> (int, float) {
+    return __nox_std_random_next_float_unit(seed);
+}

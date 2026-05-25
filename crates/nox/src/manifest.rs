@@ -16,6 +16,7 @@ pub struct Manifest {
     pub entrypoints: Entrypoints,
     pub modules: Modules,
     pub dependencies: Vec<DependencyDecl>,
+    pub codegen: Vec<CodegenArtifact>,
     pub runtime: RuntimeDecl,
 }
 
@@ -43,6 +44,18 @@ pub struct DependencyDecl {
     pub name: String,
     pub source: DependencySource,
     pub pin: DependencyPin,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodegenArtifact {
+    pub name: String,
+    pub generated: PathBuf,
+    pub generator: Option<String>,
+    pub template: Option<PathBuf>,
+    pub input_hash: Option<String>,
+    pub source_map: Option<PathBuf>,
+    pub source_map_hash: Option<String>,
+    pub command: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -220,6 +233,11 @@ impl Manifest {
             None => Vec::new(),
         };
 
+        let codegen = match document.section("codegen") {
+            Some(section) => parse_codegen(section)?,
+            None => Vec::new(),
+        };
+
         let mut runtime = RuntimeDecl::default();
         if let Some(section) = document.section("runtime") {
             if let Some(values) = section.require_string_array("permissions")? {
@@ -240,6 +258,7 @@ impl Manifest {
             entrypoints,
             modules,
             dependencies,
+            codegen,
             runtime,
         })
     }
@@ -414,6 +433,7 @@ fn validate_manifest_schema(document: &TomlDocument) -> Result<(), Diagnostic> {
                 "manifest section [modules]",
             )?,
             "dependencies" => {}
+            "codegen" => {}
             "runtime" => {
                 validate_known_keys(section, &["permissions"], "manifest section [runtime]")?
             }
@@ -609,6 +629,130 @@ fn compare_lockfile(manifest: &Manifest, lockfile: &Lockfile) -> Vec<Diagnostic>
     diagnostics
 }
 
+fn parse_codegen(section: &TomlSection) -> Result<Vec<CodegenArtifact>, Diagnostic> {
+    let mut artifacts = Vec::new();
+    for (name, value) in &section.entries {
+        let TomlValue::InlineTable(table) = value else {
+            return Err(manifest_error(format!(
+                "manifest key 'codegen.{name}' must be an inline table"
+            )));
+        };
+        artifacts.push(parse_codegen_artifact(name, table)?);
+    }
+    Ok(artifacts)
+}
+
+fn parse_codegen_artifact(
+    name: &str,
+    table: &BTreeMap<String, TomlValue>,
+) -> Result<CodegenArtifact, Diagnostic> {
+    validate_codegen_keys(name, table)?;
+    let generated = codegen_required_path(name, table, "generated")?;
+    let generator = codegen_optional_string(name, table, "generator")?;
+    let template = codegen_optional_path(name, table, "template")?;
+    let input_hash = codegen_optional_string(name, table, "input_hash")?;
+    if let Some(hash) = &input_hash {
+        validate_codegen_sha256_hash(name, "input_hash", hash)?;
+    }
+    let source_map = codegen_optional_path(name, table, "source_map")?;
+    let source_map_hash = codegen_optional_string(name, table, "source_map_hash")?;
+    if let Some(hash) = &source_map_hash {
+        validate_codegen_sha256_hash(name, "source_map_hash", hash)?;
+        if source_map.is_none() {
+            return Err(manifest_error(format!(
+                "manifest codegen artifact '{name}' source_map_hash requires source_map"
+            )));
+        }
+    }
+    let command = codegen_optional_string(name, table, "command")?;
+    Ok(CodegenArtifact {
+        name: name.to_string(),
+        generated,
+        generator,
+        template,
+        input_hash,
+        source_map,
+        source_map_hash,
+        command,
+    })
+}
+
+fn validate_codegen_keys(
+    name: &str,
+    table: &BTreeMap<String, TomlValue>,
+) -> Result<(), Diagnostic> {
+    for key in table.keys() {
+        if ![
+            "generated",
+            "generator",
+            "template",
+            "input_hash",
+            "source_map",
+            "source_map_hash",
+            "command",
+        ]
+        .contains(&key.as_str())
+        {
+            return Err(manifest_error(format!(
+                "manifest codegen artifact '{name}' contains unsupported key '{key}'"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn codegen_required_path(
+    name: &str,
+    table: &BTreeMap<String, TomlValue>,
+    key: &str,
+) -> Result<PathBuf, Diagnostic> {
+    let Some(value) = codegen_optional_string(name, table, key)? else {
+        return Err(manifest_error(format!(
+            "manifest codegen artifact '{name}' is missing required key '{key}'"
+        )));
+    };
+    validate_relative_path(&format!("codegen.{name}.{key}"), value)
+}
+
+fn codegen_optional_path(
+    name: &str,
+    table: &BTreeMap<String, TomlValue>,
+    key: &str,
+) -> Result<Option<PathBuf>, Diagnostic> {
+    match codegen_optional_string(name, table, key)? {
+        Some(value) => validate_relative_path(&format!("codegen.{name}.{key}"), value).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn codegen_optional_string(
+    name: &str,
+    table: &BTreeMap<String, TomlValue>,
+    key: &str,
+) -> Result<Option<String>, Diagnostic> {
+    match table.get(key) {
+        None => Ok(None),
+        Some(TomlValue::String(value)) => Ok(Some(value.clone())),
+        Some(_) => Err(manifest_error(format!(
+            "manifest codegen artifact '{name}' key '{key}' must be a string"
+        ))),
+    }
+}
+
+fn validate_codegen_sha256_hash(name: &str, key: &str, value: &str) -> Result<(), Diagnostic> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err(manifest_error(format!(
+            "manifest codegen artifact '{name}' {key} must use 'sha256:<hex>'"
+        )));
+    };
+    if hex.len() != 64 || !hex.chars().all(|character| character.is_ascii_hexdigit()) {
+        return Err(manifest_error(format!(
+            "manifest codegen artifact '{name}' {key} must contain a 64-character SHA-256 hex digest"
+        )));
+    }
+    Ok(())
+}
+
 fn parse_dependencies(section: &TomlSection) -> Result<Vec<DependencyDecl>, Diagnostic> {
     let mut dependencies = Vec::new();
     for (name, value) in &section.entries {
@@ -784,6 +928,11 @@ fn validate_relative_paths(key: &str, values: Vec<String>) -> Result<Vec<PathBuf
         paths.push(normalized);
     }
     Ok(paths)
+}
+
+fn validate_relative_path(key: &str, value: String) -> Result<PathBuf, Diagnostic> {
+    let mut paths = validate_relative_paths(key, vec![value])?;
+    Ok(paths.remove(0))
 }
 
 struct TomlDocument {
@@ -1073,6 +1222,7 @@ version = "0.0.1"
         assert!(manifest.entrypoints.main.is_none());
         assert!(manifest.modules.source_dirs.is_empty());
         assert!(manifest.dependencies.is_empty());
+        assert!(manifest.codegen.is_empty());
     }
 
     #[test]
@@ -1192,6 +1342,118 @@ version = "0.0.1"
 mathx = { github = "owner/mathx", rev = "main" }
 "#,
                 "full 40-character commit hash",
+            ),
+        ] {
+            let err = Manifest::parse(source, root()).unwrap_err();
+            assert_eq!(err.code, "manifest.invalid");
+            assert!(
+                err.message.contains(message),
+                "expected {message:?}, got {:?}",
+                err.message
+            );
+        }
+    }
+
+    #[test]
+    fn parses_codegen_artifacts() {
+        let source = r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[codegen]
+api = { generated = "src/generated/api.nox", generator = "tools/gen-api", template = "schemas/api.tpl", input_hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", source_map = "src/generated/api.nox.map", source_map_hash = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", command = "tools/gen-api schemas/api.tpl > src/generated/api.nox" }
+"#;
+        let manifest = Manifest::parse(source, root()).unwrap();
+        assert_eq!(
+            manifest.codegen,
+            vec![CodegenArtifact {
+                name: "api".to_string(),
+                generated: PathBuf::from("src/generated/api.nox"),
+                generator: Some("tools/gen-api".to_string()),
+                template: Some(PathBuf::from("schemas/api.tpl")),
+                input_hash: Some(
+                    "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                        .to_string()
+                ),
+                source_map: Some(PathBuf::from("src/generated/api.nox.map")),
+                source_map_hash: Some(
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_string()
+                ),
+                command: Some("tools/gen-api schemas/api.tpl > src/generated/api.nox".to_string()),
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_codegen_artifacts() {
+        for (source, message) in [
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[codegen]
+api = { generator = "tools/gen-api" }
+"#,
+                "missing required key 'generated'",
+            ),
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[codegen]
+api = { generated = "../generated.nox" }
+"#,
+                "must stay within the project root",
+            ),
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[codegen]
+api = { generated = "src/generated.nox", input_hash = "sha256:short" }
+"#,
+                "64-character SHA-256",
+            ),
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[codegen]
+api = { generated = "src/generated.nox", source_map = "../generated.map" }
+"#,
+                "must stay within the project root",
+            ),
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[codegen]
+api = { generated = "src/generated.nox", source_map_hash = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }
+"#,
+                "source_map_hash requires source_map",
+            ),
+            (
+                r#"
+[package]
+name = "demo"
+version = "0.0.1"
+
+[codegen]
+api = { generated = "src/generated.nox", mode = "auto" }
+"#,
+                "unsupported key 'mode'",
             ),
         ] {
             let err = Manifest::parse(source, root()).unwrap_err();

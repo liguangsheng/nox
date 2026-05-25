@@ -25,16 +25,19 @@ Stability tags:
 | Text & data | `std/hash.nox` | stable | sha256_hex / sha256_text / hmac_sha256_hex / hmac_sha256_text for deterministic SHA-256 and HMAC-SHA256 digests |
 | Collections | `std/array.nox` | stable | len / is_empty / push_copy / concat / slice_copy / reverse_copy / sort_copy_int / sort_copy_str / set / append / pop / map_fn / filter_fn / reduce / for_each / dedupe / contains_value |
 | Collections | `std/array.nox` | experimental | Eq trait / dedupe_equal / contains_equal; static trait MVP surface may still change |
+| Traits | `std/traits.nox` | experimental | Eq trait / Display trait / equal / not_equal / display / display_label; static trait MVP surface may still change |
 | Collections | `std/map.nox` | stable | keys / values / entries / merge / remove_copy / get_or / set / delete |
-| Option/Result | `std/option.nox` / `std/result.nox` | stable | is_some / is_none / is_ok / is_err / unwrap_or / map / map_err / and_then / map_err_to_str |
+| Option/Result | `std/option.nox` / `std/result.nox` | stable | is_some / is_none / is_ok / is_err / unwrap_or / unwrap_or_else / ok_or / filter / map / map_or / map_err / and_then / or_else / map_err_to_str |
 | Encoding | `std/encoding.nox` | stable | base64 / hex encode/decode |
 | Configuration | `std/dotenv.nox` | stable | parse (KEY=value with comments and quoting) |
 | Configuration | `std/ini.nox` | stable | parse simple INI sections and key/value pairs |
 | Configuration | `std/toml.nox` | stable | parse minimum TOML subset to json |
+| Configuration | `std/yaml.nox` | experimental | parse minimum YAML configuration subset to json |
+| Text & data | `std/xml.nox` | experimental | validate_name / escape_text / escape_attr / unescape_text / comment / text_element / attr / attrs / qname / xmlns / xmlns_default / empty_element / text_element_attrs / empty_element_ns / text_element_ns for safe XML text generation |
 | URL | `std/url.nox` | stable | parse / build / query_encode / query_decode |
 | HTTP | `std/http.nox` | stable, permissioned (`network`) | get / post / request / get_binary / post_binary / request_binary over plain HTTP/1.1, plus matching `_async` wrappers for `async fn` bodies; custom request headers and response headers for request helpers; 1 MiB response cap; 30s default timeout |
 | Time | `std/time.nox` | stable | sleep_ms (permissioned) / now_unix / now_unix_ms / duration_ms / format_unix / parse_unix / from_* / to_* / iso8601_format / iso8601_parse / deadline_ms / is_past_deadline_ms |
-| Async tasks | `std/task.nox` | stable, permissioned (`async task`) | sleep_ms / sleep / is_ready / cancel / wait / wait_or_timeout / pending_count |
+| Async tasks | `std/task.nox` | stable, permissioned (`async task`) | sleep_ms / sleep / is_ready / cancel / wait / wait_or_timeout / pending_count / delay / join2 / join3 / map / and_then |
 | Filesystem | `std/fs.nox` | stable, permissioned (`filesystem` / `filesystem_write`) | exists / read_text / try_read_text / write_text / read_binary / write_binary / canonicalize / is_file / is_dir / list_dir, plus matching `_async` wrappers for `async fn` bodies |
 | Path | `std/path.nox` | stable | join / basename / dirname / extension / normalize (lexical only) |
 | Environment | `std/env.nox` | stable, permissioned (`environment`) | get / try_get / list |

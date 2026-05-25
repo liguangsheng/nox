@@ -60,6 +60,13 @@ emit_report() {
         scripts/release-toolchain-status.sh --json
     printf '```\n'
 
+    printf '\n## Release Asset Manifest JSON\n\n'
+    printf '```json\n'
+    NOX_RELEASE_VERSION="$VERSION" \
+        NOX_RELEASE_TAG="$TAG" \
+        scripts/release-asset-manifest.sh --json
+    printf '```\n'
+
     printf '\n## Required Assets\n\n'
     while IFS= read -r asset; do
         printf '%s\n' "- \`$asset.tar.gz\` + \`$asset.sha256\`"
@@ -83,9 +90,12 @@ if [ "${1:-}" = "--self-test" ]; then
         '# Nox Phase 77 Release Evidence' \
         '## Cutover Status JSON' \
         '## Toolchain Status JSON' \
+        '## Release Asset Manifest JSON' \
         'nox.release-cutover-status.v1' \
         'nox.release-toolchain-status.v1' \
+        'nox.release-asset-manifest.v1' \
         'nox-cli-v0.0.5-x86_64-unknown-linux-gnu.tar.gz' \
+        '"commitment":"cli-only"' \
         'scripts/release-cutover-check.sh'; do
         printf '%s' "$output" | grep -Fq "$expected" || {
             printf 'release evidence report: self-test missing %s in output:\n%s\n' "$expected" "$output" >&2

@@ -1,0 +1,15 @@
+export fn base64_encode(value: str) -> str {
+    return __nox_std_encoding_base64_encode(value);
+}
+
+export fn base64_decode(value: str) -> result[str, str] {
+    return __nox_std_encoding_base64_decode(value);
+}
+
+export fn hex_encode(value: str) -> str {
+    return __nox_std_encoding_hex_encode(value);
+}
+
+export fn hex_decode(value: str) -> result[str, str] {
+    return __nox_std_encoding_hex_decode(value);
+}

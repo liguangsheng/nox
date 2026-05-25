@@ -82,6 +82,8 @@ import "std/string.nox" as string;
 import "std/json.nox" as json;
 import "std/jsonl.nox" as jsonl;
 import "std/hash.nox" as hash;
+import "std/yaml.nox" as yaml;
+import "std/xml.nox" as xml;
 
 fs.exists("nox.toml");
 env.list();
@@ -90,6 +92,8 @@ string.trim(" nox ");
 json.parse("{\"ok\":true}");
 jsonl.parse_lines("{\"ok\":true}");
 hash.sha256_text("abc");
+yaml.parse("name: nox");
+xml.escape_text("<nox>");
 ```
 
 当前可用模块表面：
@@ -155,6 +159,10 @@ hash.sha256_text("abc");
 | `std/hash.nox` | `sha256_text(value: str) -> str` | 无 | 对 UTF-8 文本计算 SHA-256，返回小写 hex digest |
 | `std/hash.nox` | `hmac_sha256_hex(key: [int], bytes: [int]) -> str` | 无 | 使用 `[int]` key 对 `[int]` 字节数组计算 HMAC-SHA256；元素必须在 `0..=255` |
 | `std/hash.nox` | `hmac_sha256_text(key: str, value: str) -> str` | 无 | 使用 UTF-8 key 对 UTF-8 文本计算 HMAC-SHA256，返回小写 hex digest |
+| `std/traits.nox` | `equal<T: Eq>(left: T, right: T) -> bool` | 无 | 小核心实验性 trait module；导出 `Eq` / `Display` trait，不建立 prelude |
+| `std/traits.nox` | `not_equal<T: Eq>(left: T, right: T) -> bool` | 无 | 使用 `Eq.equals` 的反向判断 |
+| `std/traits.nox` | `display<T: Display>(value: T) -> str` | 无 | 使用 `Display.to_str` 转换为字符串；基础 primitive 有内置 impl |
+| `std/traits.nox` | `display_label<T: Display>(label: str, value: T) -> str` | 无 | 生成 `label: value` 形式的轻量显示文本 |
 | `std/array.nox` | `len<T>(values: [T]) -> int` | 无 | n/a |
 | `std/array.nox` | `is_empty<T>(values: [T]) -> bool` | 无 | n/a |
 | `std/array.nox` | `push_copy<T>(values: [T], value: T) -> [T]` | 无 | n/a |
@@ -224,6 +232,11 @@ hash.sha256_text("abc");
 | `std/task.nox` | `wait(id: int) -> bool` | `async task` | 阻塞直到 task 完成 |
 | `std/task.nox` | `wait_or_timeout(id: int, timeout_ms: int) -> bool` | `async task` | 超时返回 false 并自动 cancel |
 | `std/task.nox` | `pending_count() -> int` | `async task` | 返回当前 pending sleep task 数 |
+| `std/task.nox` | `delay<T>(ms: int, value: T) -> task[T]` | `async task` | 等待 sleep task 后返回 `value` |
+| `std/task.nox` | `join2<T, U>(left: task[T], right: task[U]) -> task[(T, U)]` | 由传入 task 决定 | await 两个已创建 task 并返回 tuple；本身不创建 runtime task |
+| `std/task.nox` | `join3<T, U, V>(first: task[T], second: task[U], third: task[V]) -> task[(T, U, V)]` | 由传入 task 决定 | await 三个已创建 task 并返回 tuple；本身不创建 runtime task |
+| `std/task.nox` | `map<T, U>(value: task[T], f: fn(T) -> U) -> task[U]` | 由传入 task 决定 | await 已创建 task 后调用函数值；本身不创建 runtime task |
+| `std/task.nox` | `and_then<T, U>(value: task[T], f: fn(T) -> task[U]) -> task[U]` | 由传入 task 和 callback 决定 | await 已创建 task，调用函数值并 await 返回 task；本身不创建 runtime task |
 | `std/test.nox` | `assert_eq<T: Equatable>(actual: T, expected: T, label: str) -> null` | 无 | 失败返回 `test.assertion-failed` |
 | `std/test.nox` | `assert_ne<T: Equatable>(actual: T, unexpected: T, label: str) -> null` | 无 | 同上 |
 | `std/test.nox` | `assert_true(condition: bool, label: str) -> null` | 无 | 同上 |
@@ -251,6 +264,8 @@ hash.sha256_text("abc");
 | `std/dotenv.nox` | `parse(source: str) -> result[map[str, str], str]` | 无 | 解析 KEY=value，支持 `#` 注释、双/单引号、`export` 前缀；非法 key 返回 err |
 | `std/ini.nox` | `parse(source: str) -> result[map[str, map[str, str]], str]` | 无 | 解析简单 INI：`[section]` 分节，key/value 支持 `=` 或 `:`；顶层 key 放在空字符串 section 下；`#` / `;` 为注释 |
 | `std/toml.nox` | `parse(source: str) -> result[json, str]` | 无 | 最小 TOML reader：支持 table、dotted key、字符串、bool、数字和数组，返回 JSON object；datetime / array-of-tables 等完整 TOML 特性返回 err |
+| `std/yaml.nox` | `parse(source: str) -> result[json, str]` | 无 | 实验性最小 YAML reader：支持单文档、缩进 mapping、标量 sequence、inline array、引号字符串、bool、有限数字、null 和注释；anchor / alias / tag / flow mapping / 多文档 / block scalar / schema coercion 暂不支持 |
+| `std/xml.nox` | `validate_name(name: str) -> result[str, str]` / `escape_text(value: str) -> str` / `escape_attr(value: str) -> str` / `unescape_text(value: str) -> str` / `comment(value: str) -> result[str, str]` / `text_element(name: str, value: str) -> result[str, str]` / `attr(name: str, value: str) -> result[str, str]` / `attrs(values: map[str, str]) -> result[str, str]` / `qname(prefix: str, local: str) -> result[str, str]` / `xmlns(prefix: str, uri: str) -> result[str, str]` / `xmlns_default(uri: str) -> result[str, str]` / `empty_element(name: str, attrs: map[str, str]) -> result[str, str]` / `text_element_attrs(name: str, attrs: map[str, str], value: str) -> result[str, str]` / `empty_element_ns(prefix: str, local: str, attrs: map[str, str]) -> result[str, str]` / `text_element_ns(prefix: str, local: str, attrs: map[str, str], value: str) -> result[str, str]` | 无 | 实验性纯计算 XML 文本生成 helper；会校验元素/属性名和 namespace prefix/local name、转义文本，并拒绝包含 `--` 或以 `-` 结尾的 comment 内容；不解析 XML 文档、不做 namespace scope/schema 校验、不提供 streaming |
 | `std/bytes.nox` | `encode_utf8(text: str) -> [int]` / `decode_utf8(values: [int]) -> result[str, str]` | 无 | 用 `[int]` 表示字节数组（0..255）；非 UTF-8 返回 err |
 | `std/bytes.nox` | `len(values: [int]) -> int` / `get(values: [int], index: int) -> result[int, str]` | 无 | helper 形式的长度与索引；越界索引返回 err |
 | `std/bytes.nox` | `slice_copy(values: [int], start: int, length: int) -> result[[int], str]` / `equal(left: [int], right: [int]) -> bool` | 无 | helper 形式的复制 slice 与比较；显示格式使用 hex/base64 helper |
@@ -270,14 +285,20 @@ hash.sha256_text("abc");
 | `std/option.nox` | `is_some<T>(value: option[T]) -> bool` | 无 | n/a |
 | `std/option.nox` | `is_none<T>(value: option[T]) -> bool` | 无 | n/a |
 | `std/option.nox` | `unwrap_or<T>(value: option[T], fallback: T) -> T` | 无 | n/a |
+| `std/option.nox` | `unwrap_or_else<T>(value: option[T], f: fn() -> T) -> T` | 无 | `none` 时延迟调用 fallback 函数 |
+| `std/option.nox` | `ok_or<T, E>(value: option[T], error: E) -> result[T, E]` | 无 | `some` 转 `ok`，`none` 转 `err(error)` |
 | `std/option.nox` | `map<T, U>(value: option[T], f: fn(T) -> U) -> option[U]` | 无 | `some` 时转换 payload；`none` 保持 `none` |
+| `std/option.nox` | `filter<T>(value: option[T], predicate: fn(T) -> bool) -> option[T]` | 无 | `some` 且 predicate 为 true 时保留 payload，否则返回 `none` |
 | `std/option.nox` | `and_then<T, U>(value: option[T], f: fn(T) -> option[U]) -> option[U]` | 无 | `some` 时调用返回 option 的函数；`none` 保持 `none` |
 | `std/result.nox` | `is_ok<T, E>(value: result[T, E]) -> bool` | 无 | n/a |
 | `std/result.nox` | `is_err<T, E>(value: result[T, E]) -> bool` | 无 | n/a |
 | `std/result.nox` | `unwrap_or<T, E>(value: result[T, E], fallback: T) -> T` | 无 | n/a |
+| `std/result.nox` | `unwrap_or_else<T, E>(value: result[T, E], f: fn(E) -> T) -> T` | 无 | `err` 时延迟调用 fallback 函数 |
 | `std/result.nox` | `map<T, U, E>(value: result[T, E], f: fn(T) -> U) -> result[U, E]` | 无 | `ok` 时转换 payload；`err` 保留 error |
+| `std/result.nox` | `map_or<T, U, E>(value: result[T, E], fallback: U, f: fn(T) -> U) -> U` | 无 | `ok` 时转换 payload；`err` 返回 fallback |
 | `std/result.nox` | `map_err<T, E, F>(value: result[T, E], f: fn(E) -> F) -> result[T, F]` | 无 | `err` 时转换 error；`ok` 保留 payload |
 | `std/result.nox` | `and_then<T, U, E>(value: result[T, E], f: fn(T) -> result[U, E]) -> result[U, E]` | 无 | `ok` 时调用返回 result 的函数；`err` 保留 error |
+| `std/result.nox` | `or_else<T, E>(value: result[T, E], f: fn(E) -> result[T, E]) -> result[T, E]` | 无 | `err` 时调用恢复函数；`ok` 保留 payload |
 | `std/result.nox` | `map_err_to_str<T>(value: result[T, str]) -> result[T, str]` | 无 | n/a |
 | `std/process.nox` | `argv() -> [str]` | 无 | n/a |
 | `std/process.nox` | `read_stdin() -> str` | 无 | n/a |
@@ -285,6 +306,9 @@ hash.sha256_text("abc");
 | `std/process.nox` | `exit(code: int) -> null` | 无 | n/a |
 | `std/process.nox` | `run(program: str, args: [str], stdin: str, timeout_ms: int) -> result[(int, str, str), str]` | `process_run` | 返回 `(exit_code, stdout, stderr)`；输出上限 4 MiB；timeout > 0 触发 kill |
 | `std/process.nox` | `run_with(program: str, args: [str], stdin: str, timeout_ms: int, cwd: str, env_pairs: [(str, str)]) -> result[(int, str, str), str]` | `process_run` | 同 `run`，额外支持工作目录与环境变量覆盖：`cwd` 为空时继承当前工作目录，非空作为 `Command::current_dir`；`env_pairs` 在继承父进程环境基础上叠加 key/value（空列表表示完全继承），value 为 `"<unset>"` 时删除该变量，空字符串表示设置为空值；单 runtime 默认最多同时运行 8 个子进程 |
+
+压缩/归档格式、protobuf、SQLite/database driver 和 HTTPS/TLS 仍暂缓；这些能力需要更大的
+依赖、runtime capability、mock 策略或错误模型设计，暂不放进当前保守 stdlib 表面。
 
 `run` / `run_with` 的 `result.err` 消息以稳定 code 前缀开头，便于工具区分失败原因：
 
@@ -389,7 +413,8 @@ UTF-8 文本计算 HMAC，`hmac_sha256_hex(key, bytes) -> str` 使用 `[int]` ke
 
 `std/array.nox`、`std/map.nox`、`std/option.nox` 和 `std/result.nox` 也是纯计算模块，不需要
 capability。多数 array 和 map helper 仍返回拷贝；`slice_copy` 越界或负数范围返回
-`result.err(message)`。option/result helper 提供状态判断和 fallback，不引入闭包或高阶函数。
+`result.err(message)`。option/result helper 提供状态判断、fallback、延迟 fallback、`ok_or`、
+`filter`、`map`、`map_or`、`map_err`、`and_then` 和 `or_else` 组合。
 
 `std/array.nox` 与 `std/map.nox` 另有一组就地 mutation helper，会修改所有 alias 共享的底层
 存储：`array.set(values, index, value) -> result[null, str]`（`index` 越界返回
@@ -497,6 +522,17 @@ C ABI 不暴露 runtime task handle。
 如果 `async fn` 在创建可 await 的 sleep task 后失败，顶层 `Runtime::eval` 清理会释放本次
 调用中新建的 task，同时保留调用前已存在的 task。awaitable task 边界产生的 diagnostic 会保留
 host frame 和 script frame。
+
+`std/task.nox` 的 `delay<T>`、`join2<T, U>`、`join3<T, U, V>`、`map<T, U>` 和
+`and_then<T, U>` 是普通 `async fn` helper。`delay` 会创建一个 sleep task，因此复用
+`async_tasks` 权限和 pending 上限；`join2`、`join3`、`map` 和 `and_then` 只 await 调用方
+已经创建的 task 或 callback 返回的 task，不额外增加 pending task 计数，也不引入新的取消或
+状态查询语义。
+
+async runtime 分阶段路线继续保持这个小模型：当前运行时表面不包含 IO reactor、多线程 runtime、
+top-level await、async trait、语言级 cancellation token、通用 `select` / `race` 或 C ABI task
+handle。后续 `std/task.nox` 如果继续增加 helper，也必须只组合已创建 task 并复用同一套权限、
+pending-task 上限、失败清理、trace event、mock 和 diagnostic，而不是引入后台 scheduler。
 
 这些 task helper 是最小宿主函数，不是 event loop，也不是语言级 async 语法。任务状态只活在
 `Runtime` 实例内部，跨 `Runtime` 不共享；CLI 和嵌入 API 使用同一个 `Runtime`

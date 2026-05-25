@@ -1,0 +1,559 @@
+export fn assert_eq<T: Equatable>(actual: T, expected: T, label: str) -> null {
+    if (actual == expected) {
+        return null;
+    }
+    return __nox_std_test_fail(label, "assert_eq failed");
+}
+
+export fn assert_ne<T: Equatable>(actual: T, unexpected: T, label: str) -> null {
+    if (actual != unexpected) {
+        return null;
+    }
+    return __nox_std_test_fail(label, "assert_ne failed");
+}
+
+export fn assert_true(condition: bool, label: str) -> null {
+    if (condition) {
+        return null;
+    }
+    return __nox_std_test_fail(label, "assert_true failed");
+}
+
+export fn assert_false(condition: bool, label: str) -> null {
+    if (!condition) {
+        return null;
+    }
+    return __nox_std_test_fail(label, "assert_false failed");
+}
+
+export fn assert_contains(haystack: str, needle: str, label: str) -> null {
+    return __nox_std_test_assert_contains(haystack, needle, label);
+}
+
+export fn fail(label: str, message: str) -> null {
+    return __nox_std_test_fail(label, message);
+}
+
+export fn assert_snapshot(label: str, actual: str, expected: str) -> null {
+    return __nox_std_test_assert_snapshot(label, actual, expected);
+}
+
+export fn assert_table_row<T: Equatable>(label: str, index: int, actual: T, expected: T) -> null {
+    if (actual == expected) {
+        return null;
+    }
+    return __nox_std_test_fail(label, "table row mismatch at index");
+}
+
+fn __property_abs(value: int) -> int {
+    if (value < 0) {
+        return 0 - value;
+    }
+    return value;
+}
+
+fn __property_mod(value: int, modulus: int) -> int {
+    let positive: int = __property_abs(value);
+    return positive - ((positive / modulus) * modulus);
+}
+
+fn __property_next_seed(seed: int) -> int {
+    let normalized: int = __property_mod(seed, 1000000);
+    return __property_mod((normalized * 73) + 19, 1000000);
+}
+
+export fn gen_int(seed: int, min: int, max: int) -> (int, int) {
+    if (min > max) {
+        __nox_std_test_fail("property.gen_int", "min must be <= max");
+        return (seed, min);
+    }
+    let next_seed: int = __property_next_seed(seed);
+    let span: int = (max - min) + 1;
+    let value: int = min + __property_mod(next_seed, span);
+    return (next_seed, value);
+}
+
+export fn gen_bool(seed: int) -> (int, bool) {
+    let next_seed: int = __property_next_seed(seed);
+    return (next_seed, __property_mod(next_seed, 2) == 1);
+}
+
+export fn gen_string(seed: int, max_len: int) -> (int, str) {
+    if (max_len < 0) {
+        __nox_std_test_fail("property.gen_string", "max_len must be >= 0");
+        return (seed, "");
+    }
+    let pair: (int, int) = gen_int(seed, 0, max_len);
+    let (next_seed, len) = pair;
+    let out: str = "";
+    let current_seed: int = next_seed;
+    let i: int = 0;
+    while (i < len) {
+        let char_pair: (int, int) = gen_int(current_seed, 0, 2);
+        let (updated_seed, ch) = char_pair;
+        current_seed = updated_seed;
+        if (ch == 0) {
+            out = out + "a";
+        } else if (ch == 1) {
+            out = out + "b";
+        } else {
+            out = out + "c";
+        }
+        i = i + 1;
+    }
+    return (current_seed, out);
+}
+
+export fn gen_int_array(seed: int, len: int, min: int, max: int) -> (int, [int]) {
+    if (len < 0) {
+        __nox_std_test_fail("property.gen_int_array", "len must be >= 0");
+        return (seed, []);
+    }
+    let out: [int] = [];
+    let current_seed: int = seed;
+    let i: int = 0;
+    while (i < len) {
+        let pair: (int, int) = gen_int(current_seed, min, max);
+        let (next_seed, value) = pair;
+        current_seed = next_seed;
+        __nox_std_array_append(out, value);
+        i = i + 1;
+    }
+    return (current_seed, out);
+}
+
+export fn gen_int_map(seed: int, len: int, min: int, max: int) -> (int, map[str, int]) {
+    if (len < 0) {
+        __nox_std_test_fail("property.gen_int_map", "len must be >= 0");
+        return (seed, {});
+    }
+    let out: map[str, int] = {};
+    let current_seed: int = seed;
+    let i: int = 0;
+    while (i < len) {
+        let pair: (int, int) = gen_int(current_seed, min, max);
+        let (next_seed, value) = pair;
+        current_seed = next_seed;
+        out["k${i}"] = value;
+        i = i + 1;
+    }
+    return (current_seed, out);
+}
+
+export fn gen_record3<T>(seed: int, min: int, max: int, build: fn(int, str, bool) -> T) -> (int, T) {
+    let int_pair: (int, int) = gen_int(seed, min, max);
+    let (seed_after_int, id) = int_pair;
+    let string_pair: (int, str) = gen_string(seed_after_int, 8);
+    let (seed_after_string, name) = string_pair;
+    let bool_pair: (int, bool) = gen_bool(seed_after_string);
+    let (next_seed, active) = bool_pair;
+    return (next_seed, build(id, name, active));
+}
+
+export fn gen_enum3<T>(seed: int, min: int, max: int, max_len: int, build_int: fn(int) -> T, build_str: fn(str) -> T, build_bool: fn(bool) -> T) -> (int, T) {
+    let variant_pair: (int, int) = gen_int(seed, 0, 2);
+    let (seed_after_variant, variant) = variant_pair;
+    if (variant == 0) {
+        let int_pair: (int, int) = gen_int(seed_after_variant, min, max);
+        let (next_seed, value) = int_pair;
+        return (next_seed, build_int(value));
+    }
+    if (variant == 1) {
+        let string_pair: (int, str) = gen_string(seed_after_variant, max_len);
+        let (next_seed, value) = string_pair;
+        return (next_seed, build_str(value));
+    }
+    let bool_pair: (int, bool) = gen_bool(seed_after_variant);
+    let (next_seed, value) = bool_pair;
+    return (next_seed, build_bool(value));
+}
+
+fn __property_shrink_int(value: int, property: fn(int) -> bool) -> int {
+    let current: int = value;
+    let step: int = __property_abs(value) / 2;
+    while (step > 0) {
+        let candidate: int = current;
+        if (current > 0) {
+            candidate = current - step;
+        } else if (current < 0) {
+            candidate = current + step;
+        }
+        if (!property(candidate)) {
+            current = candidate;
+        }
+        step = step / 2;
+    }
+    if (current != 0 && !property(0)) {
+        return 0;
+    }
+    return current;
+}
+
+fn __property_shrink_string(value: str, property: fn(str) -> bool) -> str {
+    if (value != "" && !property("")) {
+        return "";
+    }
+    return value;
+}
+
+fn __property_array_prefix(values: [int], length: int) -> [int] {
+    let out: [int] = [];
+    let i: int = 0;
+    let n: int = __nox_std_array_len(values);
+    while (i < length && i < n) {
+        __nox_std_array_append(out, values[i]);
+        i = i + 1;
+    }
+    return out;
+}
+
+fn __property_array_with_value(values: [int], index: int, value: int) -> [int] {
+    let out: [int] = [];
+    let i: int = 0;
+    let n: int = __nox_std_array_len(values);
+    while (i < n) {
+        if (i == index) {
+            __nox_std_array_append(out, value);
+        } else {
+            __nox_std_array_append(out, values[i]);
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn __property_shrink_int_array(values: [int], property: fn([int]) -> bool) -> [int] {
+    let current: [int] = __property_array_prefix(values, __nox_std_array_len(values));
+    let length: int = __nox_std_array_len(current);
+    let prefix_len: int = 0;
+    while (prefix_len < length) {
+        let prefix: [int] = __property_array_prefix(current, prefix_len);
+        if (!property(prefix)) {
+            current = prefix;
+            prefix_len = length;
+        } else {
+            prefix_len = prefix_len + 1;
+        }
+    }
+    let i: int = 0;
+    while (i < __nox_std_array_len(current)) {
+        let step: int = __property_abs(current[i]) / 2;
+        while (step > 0) {
+            let candidate_value: int = current[i];
+            if (current[i] > 0) {
+                candidate_value = current[i] - step;
+            } else if (current[i] < 0) {
+                candidate_value = current[i] + step;
+            }
+            let candidate: [int] = __property_array_with_value(current, i, candidate_value);
+            if (!property(candidate)) {
+                current = candidate;
+            }
+            step = step / 2;
+        }
+        if (current[i] != 0) {
+            let zero_candidate: [int] = __property_array_with_value(current, i, 0);
+            if (!property(zero_candidate)) {
+                current = zero_candidate;
+            }
+        }
+        i = i + 1;
+    }
+    return current;
+}
+
+fn __property_map_prefix(values: map[str, int], length: int) -> map[str, int] {
+    let out: map[str, int] = {};
+    let i: int = 0;
+    while (i < length) {
+        let key: str = "k${i}";
+        let found: option[int] = map_get(values, key);
+        match (found) {
+            some(value) => {
+                out[key] = value;
+            }
+            none => {}
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn __property_map_with_value(values: map[str, int], key: str, value: int) -> map[str, int] {
+    let out: map[str, int] = {};
+    let keys: [str] = map_keys(values);
+    let i: int = 0;
+    while (i < __nox_std_array_len(keys)) {
+        let current_key: str = keys[i];
+        let found: option[int] = map_get(values, current_key);
+        match (found) {
+            some(current_value) => {
+                if (current_key == key) {
+                    out[current_key] = value;
+                } else {
+                    out[current_key] = current_value;
+                }
+            }
+            none => {}
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+fn __property_shrink_int_map(values: map[str, int], property: fn(map[str, int]) -> bool) -> map[str, int] {
+    let current: map[str, int] = __property_map_prefix(values, __nox_std_array_len(map_keys(values)));
+    let length: int = __nox_std_array_len(map_keys(current));
+    let prefix_len: int = 0;
+    while (prefix_len < length) {
+        let prefix: map[str, int] = __property_map_prefix(current, prefix_len);
+        if (!property(prefix)) {
+            current = prefix;
+            prefix_len = length;
+        } else {
+            prefix_len = prefix_len + 1;
+        }
+    }
+    let keys: [str] = map_keys(current);
+    let i: int = 0;
+    while (i < __nox_std_array_len(keys)) {
+        let key: str = keys[i];
+        let found: option[int] = map_get(current, key);
+        match (found) {
+            some(value) => {
+                let step: int = __property_abs(value) / 2;
+                while (step > 0) {
+                    let candidate_value: int = value;
+                    if (value > 0) {
+                        candidate_value = value - step;
+                    } else if (value < 0) {
+                        candidate_value = value + step;
+                    }
+                    let candidate: map[str, int] = __property_map_with_value(current, key, candidate_value);
+                    if (!property(candidate)) {
+                        current = candidate;
+                        value = candidate_value;
+                    }
+                    step = step / 2;
+                }
+                if (value != 0) {
+                    let zero_candidate: map[str, int] = __property_map_with_value(current, key, 0);
+                    if (!property(zero_candidate)) {
+                        current = zero_candidate;
+                    }
+                }
+            }
+            none => {}
+        }
+        i = i + 1;
+    }
+    return current;
+}
+
+export fn assert_property_record3<T>(label: str, seed: int, cases: int, min: int, max: int, build: fn(int, str, bool) -> T, property: fn(T) -> bool) -> null {
+    if (cases <= 0) {
+        return __nox_std_test_fail(label, "property cases must be > 0");
+    }
+    if (min > max) {
+        return __nox_std_test_fail(label, "property min must be <= max");
+    }
+    let current_seed: int = seed;
+    let i: int = 0;
+    while (i < cases) {
+        let int_pair: (int, int) = gen_int(current_seed, min, max);
+        let (seed_after_int, id) = int_pair;
+        let string_pair: (int, str) = gen_string(seed_after_int, 8);
+        let (seed_after_string, name) = string_pair;
+        let bool_pair: (int, bool) = gen_bool(seed_after_string);
+        let (next_seed, active) = bool_pair;
+        current_seed = next_seed;
+        let value: T = build(id, name, active);
+        if (!property(value)) {
+            let minimized_id: int = __property_shrink_int(id, fn(candidate: int) -> bool {
+                return property(build(candidate, name, active));
+            });
+            let minimized_name: str = __property_shrink_string(name, fn(candidate: str) -> bool {
+                return property(build(minimized_id, candidate, active));
+            });
+            let minimized_active: bool = active;
+            if (active && !property(build(minimized_id, minimized_name, false))) {
+                minimized_active = false;
+            }
+            return __nox_std_test_fail(
+                label,
+                "property failed seed=${seed} case=${i} record_fields=3 minimized_int=${minimized_id} minimized_str_len=${len(minimized_name)} minimized_bool=${minimized_active} replay=\"${label}:record3:int=${minimized_id}:strlen=${len(minimized_name)}:bool=${minimized_active}\""
+            );
+        }
+        i = i + 1;
+    }
+    return null;
+}
+
+export fn assert_property_enum3<T>(label: str, seed: int, cases: int, min: int, max: int, max_len: int, build_int: fn(int) -> T, build_str: fn(str) -> T, build_bool: fn(bool) -> T, property: fn(T) -> bool) -> null {
+    if (cases <= 0) {
+        return __nox_std_test_fail(label, "property cases must be > 0");
+    }
+    if (min > max) {
+        return __nox_std_test_fail(label, "property min must be <= max");
+    }
+    if (max_len < 0) {
+        return __nox_std_test_fail(label, "property max_len must be >= 0");
+    }
+    let current_seed: int = seed;
+    let i: int = 0;
+    while (i < cases) {
+        let variant_pair: (int, int) = gen_int(current_seed, 0, 2);
+        let (seed_after_variant, variant) = variant_pair;
+        let next_seed: int = seed_after_variant;
+        let failed: bool = false;
+        let minimized_variant: int = variant;
+        let minimized_int: int = 0;
+        let minimized_str_len: int = 0;
+        let minimized_bool: bool = false;
+        if (variant == 0) {
+            let int_pair: (int, int) = gen_int(seed_after_variant, min, max);
+            let (seed_after_value, payload) = int_pair;
+            next_seed = seed_after_value;
+            if (!property(build_int(payload))) {
+                failed = true;
+                minimized_int = __property_shrink_int(payload, fn(candidate: int) -> bool {
+                    return property(build_int(candidate));
+                });
+            }
+        } else if (variant == 1) {
+            let string_pair: (int, str) = gen_string(seed_after_variant, max_len);
+            let (seed_after_value, payload) = string_pair;
+            next_seed = seed_after_value;
+            if (!property(build_str(payload))) {
+                failed = true;
+                let minimized_str: str = __property_shrink_string(payload, fn(candidate: str) -> bool {
+                    return property(build_str(candidate));
+                });
+                minimized_str_len = len(minimized_str);
+            }
+        } else {
+            let bool_pair: (int, bool) = gen_bool(seed_after_variant);
+            let (seed_after_value, payload) = bool_pair;
+            next_seed = seed_after_value;
+            if (!property(build_bool(payload))) {
+                failed = true;
+                minimized_bool = payload;
+                if (payload && !property(build_bool(false))) {
+                    minimized_bool = false;
+                }
+            }
+        }
+        current_seed = next_seed;
+        if (failed) {
+            if (variant != 0 && !property(build_int(0))) {
+                minimized_variant = 0;
+                minimized_int = 0;
+                minimized_str_len = 0;
+                minimized_bool = false;
+            }
+            return __nox_std_test_fail(
+                label,
+                "property failed seed=${seed} case=${i} enum_variant=${variant} minimized_variant=${minimized_variant} minimized_int=${minimized_int} minimized_str_len=${minimized_str_len} minimized_bool=${minimized_bool} replay=\"${label}:enum3:variant=${minimized_variant}:int=${minimized_int}:strlen=${minimized_str_len}:bool=${minimized_bool}\""
+            );
+        }
+        i = i + 1;
+    }
+    return null;
+}
+
+export fn assert_property_int(label: str, seed: int, cases: int, min: int, max: int, property: fn(int) -> bool) -> null {
+    if (cases <= 0) {
+        return __nox_std_test_fail(label, "property cases must be > 0");
+    }
+    if (min > max) {
+        return __nox_std_test_fail(label, "property min must be <= max");
+    }
+    let current_seed: int = seed;
+    let i: int = 0;
+    while (i < cases) {
+        let pair: (int, int) = gen_int(current_seed, min, max);
+        let (next_seed, value) = pair;
+        current_seed = next_seed;
+        if (!property(value)) {
+            let minimized: int = __property_shrink_int(value, property);
+            return __nox_std_test_fail(
+                label,
+                "property failed seed=${seed} case=${i} value=${value} minimized=${minimized} replay=\"${label}:${minimized}\""
+            );
+        }
+        i = i + 1;
+    }
+    return null;
+}
+
+export fn assert_property_int_array(label: str, seed: int, cases: int, len: int, min: int, max: int, property: fn([int]) -> bool) -> null {
+    if (cases <= 0) {
+        return __nox_std_test_fail(label, "property cases must be > 0");
+    }
+    if (len < 0) {
+        return __nox_std_test_fail(label, "property len must be >= 0");
+    }
+    if (min > max) {
+        return __nox_std_test_fail(label, "property min must be <= max");
+    }
+    let current_seed: int = seed;
+    let i: int = 0;
+    while (i < cases) {
+        let pair: (int, [int]) = gen_int_array(current_seed, len, min, max);
+        let (next_seed, value) = pair;
+        current_seed = next_seed;
+        if (!property(value)) {
+            let minimized: [int] = __property_shrink_int_array(value, property);
+            let value_len: int = __nox_std_array_len(value);
+            let minimized_len: int = __nox_std_array_len(minimized);
+            let minimized_first: int = 0;
+            if (minimized_len > 0) {
+                minimized_first = minimized[0];
+            }
+            return __nox_std_test_fail(
+                label,
+                "property failed seed=${seed} case=${i} value_len=${value_len} minimized_len=${minimized_len} minimized_first=${minimized_first} replay=\"${label}:len=${minimized_len}:first=${minimized_first}\""
+            );
+        }
+        i = i + 1;
+    }
+    return null;
+}
+
+export fn assert_property_int_map(label: str, seed: int, cases: int, len: int, min: int, max: int, property: fn(map[str, int]) -> bool) -> null {
+    if (cases <= 0) {
+        return __nox_std_test_fail(label, "property cases must be > 0");
+    }
+    if (len < 0) {
+        return __nox_std_test_fail(label, "property len must be >= 0");
+    }
+    if (min > max) {
+        return __nox_std_test_fail(label, "property min must be <= max");
+    }
+    let current_seed: int = seed;
+    let i: int = 0;
+    while (i < cases) {
+        let pair: (int, map[str, int]) = gen_int_map(current_seed, len, min, max);
+        let (next_seed, value) = pair;
+        current_seed = next_seed;
+        if (!property(value)) {
+            let minimized: map[str, int] = __property_shrink_int_map(value, property);
+            let value_len: int = __nox_std_array_len(map_keys(value));
+            let minimized_len: int = __nox_std_array_len(map_keys(minimized));
+            let minimized_first: int = 0;
+            let first: option[int] = map_get(minimized, "k0");
+            match (first) {
+                some(first_value) => {
+                    minimized_first = first_value;
+                }
+                none => {}
+            }
+            return __nox_std_test_fail(
+                label,
+                "property failed seed=${seed} case=${i} value_len=${value_len} minimized_len=${minimized_len} minimized_first=${minimized_first} replay=\"${label}:len=${minimized_len}:k0=${minimized_first}\""
+            );
+        }
+        i = i + 1;
+    }
+    return null;
+}

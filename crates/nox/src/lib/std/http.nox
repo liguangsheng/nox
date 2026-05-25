@@ -1,0 +1,47 @@
+export fn get(url: str, timeout_ms: int) -> result[(int, str), str] {
+    return __nox_std_http_get(url, timeout_ms);
+}
+
+export async fn get_async(url: str, timeout_ms: int) -> result[(int, str), str] {
+    return get(url, timeout_ms);
+}
+
+export fn post(url: str, body: str, timeout_ms: int) -> result[(int, str), str] {
+    return __nox_std_http_post(url, body, timeout_ms);
+}
+
+export async fn post_async(url: str, body: str, timeout_ms: int) -> result[(int, str), str] {
+    return post(url, body, timeout_ms);
+}
+
+export fn request(method: str, url: str, headers: map[str, str], body: str, timeout_ms: int) -> result[(int, map[str, str], str), str] {
+    return __nox_std_http_request(method, url, headers, body, timeout_ms);
+}
+
+export async fn request_async(method: str, url: str, headers: map[str, str], body: str, timeout_ms: int) -> result[(int, map[str, str], str), str] {
+    return request(method, url, headers, body, timeout_ms);
+}
+
+export fn get_binary(url: str, timeout_ms: int) -> result[(int, [int]), str] {
+    return __nox_std_http_get_binary(url, timeout_ms);
+}
+
+export async fn get_binary_async(url: str, timeout_ms: int) -> result[(int, [int]), str] {
+    return get_binary(url, timeout_ms);
+}
+
+export fn post_binary(url: str, body: [int], timeout_ms: int) -> result[(int, [int]), str] {
+    return __nox_std_http_post_binary(url, body, timeout_ms);
+}
+
+export async fn post_binary_async(url: str, body: [int], timeout_ms: int) -> result[(int, [int]), str] {
+    return post_binary(url, body, timeout_ms);
+}
+
+export fn request_binary(method: str, url: str, headers: map[str, str], body: [int], timeout_ms: int) -> result[(int, map[str, str], [int]), str] {
+    return __nox_std_http_request_binary(method, url, headers, body, timeout_ms);
+}
+
+export async fn request_binary_async(method: str, url: str, headers: map[str, str], body: [int], timeout_ms: int) -> result[(int, map[str, str], [int]), str] {
+    return request_binary(method, url, headers, body, timeout_ms);
+}

@@ -4,8 +4,23 @@ import "std/array.nox" as array;
 
 let loaded: result[int, str] = err("missing config");
 let fallback: int = result.unwrap_or(loaded, 80);
+let recovered: result[int, str] = result.or_else(loaded, fn(message: str) -> result[int, str] {
+    if (message == "missing config") {
+        return ok(81);
+    } else {
+        return err(message);
+    }
+});
+let lazy_result: int = result.unwrap_or_else(loaded, fn(message: str) -> int {
+    return len(message);
+});
 let maybe_name: option[str] = none;
 let name: str = option.unwrap_or(maybe_name, "service");
+let maybe_port: option[int] = none;
+let port: result[int, str] = option.ok_or(maybe_port, "missing port");
+let lazy_name: str = option.unwrap_or_else(maybe_name, fn() -> str {
+    return "lazy-service";
+});
 let empty_errors: [str] = [];
 let errors: [str] = array.push_copy(empty_errors, "missing config");
 
@@ -13,7 +28,11 @@ if (
     result.is_err(loaded) &&
     option.is_none(maybe_name) &&
     fallback == 80 &&
+    result.unwrap_or(recovered, 0) == 81 &&
+    lazy_result == 14 &&
     name == "service" &&
+    result.is_err(port) &&
+    lazy_name == "lazy-service" &&
     len(errors) == 1
 ) {
     "errors-ok";

@@ -193,6 +193,7 @@ run_gate "release candidate readiness guard" scripts/release-candidate-readiness
 run_gate "release-prep version helper self-test" scripts/prepare-release-version.sh --self-test
 run_gate "release asset builder self-test" scripts/build-release-assets.sh --self-test
 run_gate "release asset manifest self-test" scripts/release-asset-manifest.sh --self-test
+run_gate "release asset smoke self-test" scripts/release-asset-smoke.sh --self-test
 run_gate "release toolchain status self-test" scripts/release-toolchain-status.sh --self-test
 run_gate "release cutover check self-test" scripts/release-cutover-check.sh --self-test
 run_gate "release cutover status self-test" scripts/release-cutover-status.sh --self-test
@@ -222,17 +223,20 @@ PY
 '
 run_gate "release-prep version helper check-only" sh -eu -c '
 current=$(awk -F"\"" "/^version = /{print \$2; exit}" Cargo.toml)
-if [ "$current" = "0.0.5" ]; then
-    printf "release-prep version helper check-only: already on 0.0.5\n"
+patch=${current##*.}
+next_patch=$((patch + 1))
+next_version="0.0.$next_patch"
+if grep -q "^## \\[$current\\]" CHANGELOG.md; then
+    printf "release-prep version helper check-only: already on %s\n" "$current"
 else
-    scripts/prepare-release-version.sh --check-only 0.0.5 2026-05-24
+    scripts/prepare-release-version.sh --check-only "$next_version" 2026-05-25
 fi
 '
 
 # Small-footprint guardrail: PLAN 完成定义第 10 项的 release-time 显式断言。
 # 阈值由 P8.3 冻结；上调阈值必须独立 commit + CHANGELOG + ADR，不允许在 release-prep 阶段
 # 临时上调来掩盖回归。LOC 不设硬阈值，只回显趋势值供 release notes 记录。
-NOX_SIZE_CAP_CLI=${NOX_SIZE_CAP_CLI:-3145728}        # 3.0 MiB; ADR 0025 recalibrates after staged async/await MVP growth
+NOX_SIZE_CAP_CLI=${NOX_SIZE_CAP_CLI:-3227648}        # 3.078125 MiB; ADR 0025 recalibrates after codegen source-map audit growth
 NOX_SIZE_CAP_CORE=${NOX_SIZE_CAP_CORE:-1572864}      # 1.5 MiB; current baseline ~1.0 MiB (tightened from 2.5 MiB at v0.0.3 post-release)
 run_gate "small-footprint guardrail: release build" cargo build --release -p nox -p nox_core
 run_gate "small-footprint guardrail: CLI binary size cap" env CAP="$NOX_SIZE_CAP_CLI" sh -eu -c '

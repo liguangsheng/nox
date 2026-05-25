@@ -2451,9 +2451,9 @@ fn trait_impl_method_dispatch_allows_same_method_name_for_different_types() {
 }
 
 #[test]
-fn trait_impl_rejects_top_level_function_collision() {
+fn trait_impl_method_can_share_name_with_unrelated_top_level_function() {
     let mut engine = Engine::new();
-    let err = engine
+    let value = engine
         .eval(
             r#"
             trait Display {
@@ -2473,10 +2473,82 @@ fn trait_impl_rejects_top_level_function_collision() {
                     return self.name;
                 }
             }
+
+            let user: User = User { name: "nox" };
+            user.to_str();
+            "#,
+        )
+        .unwrap();
+    assert_eq!(value, Value::string("nox"));
+}
+
+#[test]
+fn record_style_method_keeps_priority_over_trait_impl_with_same_name() {
+    let mut engine = Engine::new();
+    let value = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+            }
+
+            record User {
+                name: str,
+            }
+
+            fn to_str(value: User) -> str {
+                return "record-" + value.name;
+            }
+
+            impl Display for User {
+                fn to_str(self: User) -> str {
+                    return "trait-" + self.name;
+                }
+            }
+
+            let user: User = User { name: "nox" };
+            user.to_str();
+            "#,
+        )
+        .unwrap();
+    assert_eq!(value, Value::string("record-nox"));
+}
+
+#[test]
+fn trait_duplicate_method_reports_stable_code() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+                fn to_str(self: Self) -> str;
+            }
             "#,
         )
         .unwrap_err();
-    assert_eq!(err.code, "trait.method-ambiguous");
+    assert_eq!(err.code, "trait.duplicate");
+}
+
+#[test]
+fn trait_impl_rejects_non_nominal_target_with_stable_code() {
+    let mut engine = Engine::new();
+    let err = engine
+        .eval(
+            r#"
+            trait Display {
+                fn to_str(self: Self) -> str;
+            }
+
+            impl Display for [int] {
+                fn to_str(self: [int]) -> str {
+                    return "values";
+                }
+            }
+            "#,
+        )
+        .unwrap_err();
+    assert_eq!(err.code, "trait.impl-orphan");
 }
 
 #[test]
@@ -3644,6 +3716,32 @@ fn async_question_mark_propagates_result_and_option_payloads() {
         )
         .unwrap();
     assert_eq!(value, Value::Int(7));
+}
+
+#[test]
+fn async_generic_function_infers_task_payloads() {
+    let mut engine = Engine::new();
+    let value = engine
+        .eval(
+            r#"
+            async fn ready() -> int {
+                return 7;
+            }
+
+            fn identity_task<T>(value: task[T]) -> task[T] {
+                return value;
+            }
+
+            async fn verify() -> int {
+                return await identity_task(ready());
+            }
+
+            let task: task[int] = verify();
+            0;
+            "#,
+        )
+        .unwrap();
+    assert_eq!(value, Value::Int(0));
 }
 
 #[test]

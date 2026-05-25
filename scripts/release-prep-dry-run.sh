@@ -26,14 +26,25 @@ fail() {
     exit 1
 }
 
+current_version() {
+    awk -F'"' '/^version = /{print $2; exit}' Cargo.toml
+}
+
+validate_existing_candidate() {
+    NOX_RELEASE_READINESS_MODE=cutover NOX_RELEASE_CUTOVER_VERSION="$VERSION" \
+        scripts/release-candidate-readiness.sh >/dev/null
+    NOX_RELEASE_VERSION="$VERSION" scripts/release-notes.sh >/dev/null
+}
+
 if [ "${1:-}" = "--self-test" ]; then
-    current=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
-    if [ "$current" = "0.0.5" ]; then
-        NOX_RELEASE_READINESS_MODE=cutover NOX_RELEASE_CUTOVER_VERSION=0.0.5 \
-            scripts/release-candidate-readiness.sh >/dev/null
-        NOX_RELEASE_VERSION=0.0.5 scripts/release-notes.sh >/dev/null
+    current=$(current_version)
+    if grep -q "^## \\[$current\\]" CHANGELOG.md; then
+        VERSION=$current
+        validate_existing_candidate
     else
-        scripts/prepare-release-version.sh --check-only 0.0.5 2026-05-24 >/dev/null
+        patch=${current##*.}
+        next_patch=$((patch + 1))
+        scripts/prepare-release-version.sh --check-only "0.0.$next_patch" 2026-05-25 >/dev/null
     fi
     ! NOX_RELEASE_VERSION=1.0.0 "$0" --validate-only >/dev/null 2>/dev/null || {
         fail "self-test accepted invalid version"
@@ -43,6 +54,11 @@ if [ "${1:-}" = "--self-test" ]; then
 fi
 
 if [ "${1:-}" = "--validate-only" ]; then
+    current=$(current_version)
+    if [ "$current" = "$VERSION" ]; then
+        validate_existing_candidate
+        exit 0
+    fi
     scripts/prepare-release-version.sh --check-only "$VERSION" "$DATE" >/dev/null
     exit 0
 fi
@@ -53,6 +69,13 @@ if [ $# -eq 2 ]; then
 elif [ $# -ne 0 ]; then
     usage
     exit 2
+fi
+
+current=$(current_version)
+if [ "$current" = "$VERSION" ]; then
+    validate_existing_candidate
+    printf 'release prep dry-run: already prepared for %s (%s); cutover readiness ok\n' "$VERSION" "$DATE"
+    exit 0
 fi
 
 scripts/prepare-release-version.sh --check-only "$VERSION" "$DATE" >/dev/null

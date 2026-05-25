@@ -1,0 +1,19 @@
+export fn join(left: str, right: str) -> str {
+    return __nox_std_path_join(left, right);
+}
+
+export fn basename(path: str) -> str {
+    return __nox_std_path_basename(path);
+}
+
+export fn dirname(path: str) -> str {
+    return __nox_std_path_dirname(path);
+}
+
+export fn extension(path: str) -> str {
+    return __nox_std_path_extension(path);
+}
+
+export fn normalize(path: str) -> str {
+    return __nox_std_path_normalize(path);
+}

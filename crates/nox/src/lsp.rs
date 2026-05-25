@@ -70,7 +70,7 @@ impl LspServer {
                     }
                 }
                 vec![format!(
-                    "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"capabilities\":{{\"textDocumentSync\":1,\"hoverProvider\":true,\"definitionProvider\":true,\"renameProvider\":{{\"prepareProvider\":true}},\"documentSymbolProvider\":true,\"workspaceSymbolProvider\":true,\"documentFormattingProvider\":true,\"completionProvider\":{{\"triggerCharacters\":[\".\"]}},\"signatureHelpProvider\":{{\"triggerCharacters\":[\"(\",\",\"]}},\"codeActionProvider\":true,\"codeLensProvider\":{{\"resolveProvider\":false}}}}}}}}"
+                    "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"capabilities\":{{\"textDocumentSync\":1,\"hoverProvider\":true,\"definitionProvider\":true,\"renameProvider\":{{\"prepareProvider\":true}},\"documentSymbolProvider\":true,\"workspaceSymbolProvider\":true,\"documentFormattingProvider\":true,\"semanticTokensProvider\":{{\"legend\":{{\"tokenTypes\":[\"namespace\",\"type\",\"function\",\"variable\",\"keyword\",\"string\",\"number\",\"comment\"],\"tokenModifiers\":[\"declaration\",\"readonly\",\"async\"]}},\"full\":true}},\"completionProvider\":{{\"triggerCharacters\":[\".\"]}},\"signatureHelpProvider\":{{\"triggerCharacters\":[\"(\",\",\"]}},\"codeActionProvider\":{{\"codeActionKinds\":[\"quickfix\",\"source\",\"source.fixAll.nox\",\"source.format.nox\"]}},\"codeLensProvider\":{{\"resolveProvider\":false}}}}}}}}"
                 )]
             }
             "shutdown" => {
@@ -137,6 +137,13 @@ impl LspServer {
                     return Vec::new();
                 };
                 vec![self.document_symbol_response(&id, &uri)]
+            }
+            "textDocument/semanticTokens/full" => {
+                let (Some(id), Some(uri)) = (json_id(message), json_string_field(message, "uri"))
+                else {
+                    return Vec::new();
+                };
+                vec![self.semantic_tokens_response(&id, &uri)]
             }
             "workspace/symbol" => {
                 let Some(id) = json_id(message) else {
@@ -354,6 +361,14 @@ impl LspServer {
             .collect::<Vec<_>>()
             .join(",");
         format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":[{symbols}]}}")
+    }
+
+    fn semantic_tokens_response(&self, id: &str, uri: &str) -> String {
+        let Some(source) = self.documents.get(uri) else {
+            return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}");
+        };
+        let data = encode_semantic_tokens(&semantic_tokens(source));
+        format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"data\":[{data}]}}}}")
     }
 
     fn workspace_symbol_response(&mut self, id: &str, query: &str) -> String {
@@ -715,11 +730,13 @@ impl LspServer {
             .as_deref()
             .and_then(|alias| self.module_hover_value(uri, &source, alias))
         {
+            let value = append_generated_source_note(value, generated_source_hover_note(uri));
             return format!(
                 "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"contents\":{{\"kind\":\"plaintext\",\"value\":\"{}\"}}}}}}",
                 json_escape(&value)
             );
         }
+        let generated_note = generated_source_hover_note(uri);
         let doc_comment = identifier
             .as_deref()
             .and_then(|name| doc_comment_for_top_level(&source, name));
@@ -743,6 +760,10 @@ impl LspServer {
         match result {
             Ok(Some(ty)) => {
                 let mut value = ty.to_string();
+                if let Some(note) = generated_note.as_ref() {
+                    value.push_str("\n\n");
+                    value.push_str(note);
+                }
                 if let Some(signature) = source_signature.as_ref() {
                     value.push_str("\n\n");
                     value.push_str(&signature.label);
@@ -770,6 +791,10 @@ impl LspServer {
             Ok(None) | Err(_) => match host_signature {
                 Some(signature) => {
                     let mut value = host_signature_label(&signature);
+                    if let Some(note) = generated_note.as_ref() {
+                        value.push_str("\n\n");
+                        value.push_str(note);
+                    }
                     if let Some(doc) = signature.docstring {
                         value.push_str("\n\n");
                         value.push_str(&doc);
@@ -783,7 +808,13 @@ impl LspServer {
                         json_escape(&value)
                     )
                 }
-                None => format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}"),
+                None => match generated_note {
+                    Some(value) => format!(
+                        "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"contents\":{{\"kind\":\"plaintext\",\"value\":\"{}\"}}}}}}",
+                        json_escape(&value)
+                    ),
+                    None => format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":null}}"),
+                },
             },
         }
     }
@@ -880,17 +911,22 @@ impl LspServer {
             return format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":[]}}");
         };
         let mut actions = Vec::new();
-        if source.contains("TODO") {
+        if let Some((start, end)) = todo_marker_range(source) {
+            let (start_line, start_character) = line_character(source, start);
+            let (end_line, end_character) = line_character(source, end);
             actions.push(format!(
-                "{{\"title\":\"Remove TODO marker\",\"kind\":\"quickfix\",\"edit\":{{\"changes\":{{\"{}\":[{{\"range\":{{\"start\":{{\"line\":0,\"character\":0}},\"end\":{{\"line\":0,\"character\":0}}}},\"newText\":\"\"}}]}}}}}}",
-                json_escape(uri)
-            ));
-        } else {
-            actions.push(format!(
-                "{{\"title\":\"Run nox check\",\"kind\":\"source\",\"command\":{{\"title\":\"Run nox check\",\"command\":\"nox.check\",\"arguments\":[\"{}\"]}}}}",
+                "{{\"title\":\"Remove TODO marker\",\"kind\":\"quickfix\",\"edit\":{{\"changes\":{{\"{}\":[{{\"range\":{{\"start\":{{\"line\":{start_line},\"character\":{start_character}}},\"end\":{{\"line\":{end_line},\"character\":{end_character}}}}},\"newText\":\"\"}}]}}}}}}",
                 json_escape(uri)
             ));
         }
+        actions.push(format!(
+            "{{\"title\":\"Run nox check\",\"kind\":\"source.fixAll.nox\",\"command\":{{\"title\":\"Run nox check\",\"command\":\"nox.check\",\"arguments\":[\"{}\"]}}}}",
+            json_escape(uri)
+        ));
+        actions.push(format!(
+            "{{\"title\":\"Format document\",\"kind\":\"source.format.nox\",\"command\":{{\"title\":\"Format document\",\"command\":\"nox.format\",\"arguments\":[\"{}\"]}}}}",
+            json_escape(uri)
+        ));
         format!(
             "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":[{}]}}",
             actions.join(",")
@@ -1090,6 +1126,319 @@ fn stable_hash(value: impl Hash) -> u64 {
     hasher.finish()
 }
 
+fn todo_marker_range(source: &str) -> Option<(usize, usize)> {
+    let mut line_start = 0;
+    for line in source.split_inclusive('\n') {
+        if let Some(comment_start) = line.find("//") {
+            if let Some(todo_start) = line[comment_start..].find("TODO") {
+                let start = line_start + comment_start + todo_start;
+                return Some((start, start + "TODO".len()));
+            }
+        }
+        line_start += line.len();
+    }
+    None
+}
+
+const SEMANTIC_TOKEN_NAMESPACE: u32 = 0;
+const SEMANTIC_TOKEN_TYPE: u32 = 1;
+const SEMANTIC_TOKEN_FUNCTION: u32 = 2;
+const SEMANTIC_TOKEN_VARIABLE: u32 = 3;
+const SEMANTIC_TOKEN_KEYWORD: u32 = 4;
+const SEMANTIC_TOKEN_STRING: u32 = 5;
+const SEMANTIC_TOKEN_NUMBER: u32 = 6;
+const SEMANTIC_TOKEN_COMMENT: u32 = 7;
+
+const SEMANTIC_MOD_DECLARATION: u32 = 1;
+const SEMANTIC_MOD_READONLY: u32 = 1 << 1;
+const SEMANTIC_MOD_ASYNC: u32 = 1 << 2;
+
+#[derive(Debug, Clone, Copy)]
+struct SemanticToken {
+    line: u32,
+    start: u32,
+    length: u32,
+    token_type: u32,
+    modifiers: u32,
+}
+
+fn semantic_tokens(source: &str) -> Vec<SemanticToken> {
+    let mut tokens = Vec::new();
+    for (line, text) in source.lines().enumerate() {
+        semantic_tokens_for_line(line as u32, text, &mut tokens);
+    }
+    tokens
+}
+
+fn semantic_tokens_for_line(line_number: u32, line: &str, tokens: &mut Vec<SemanticToken>) {
+    let mut byte = 0usize;
+    let mut character = 0u32;
+    let mut pending_declaration: Option<(u32, u32)> = None;
+    let mut pending_async = false;
+
+    while byte < line.len() {
+        if line[byte..].starts_with("//") {
+            tokens.push(SemanticToken {
+                line: line_number,
+                start: character,
+                length: line[byte..].chars().count() as u32,
+                token_type: SEMANTIC_TOKEN_COMMENT,
+                modifiers: 0,
+            });
+            break;
+        }
+
+        let ch = line[byte..]
+            .chars()
+            .next()
+            .expect("byte index stays on a char boundary");
+        if ch.is_whitespace() {
+            byte += ch.len_utf8();
+            character += 1;
+            continue;
+        }
+
+        if ch == '"' {
+            let start = character;
+            byte += ch.len_utf8();
+            character += 1;
+            let mut escaped = false;
+            while byte < line.len() {
+                let current = line[byte..]
+                    .chars()
+                    .next()
+                    .expect("byte index stays on a char boundary");
+                byte += current.len_utf8();
+                character += 1;
+                if current == '"' && !escaped {
+                    break;
+                }
+                escaped = current == '\\' && !escaped;
+                if current != '\\' {
+                    escaped = false;
+                }
+            }
+            tokens.push(SemanticToken {
+                line: line_number,
+                start,
+                length: character - start,
+                token_type: SEMANTIC_TOKEN_STRING,
+                modifiers: 0,
+            });
+            pending_declaration = None;
+            continue;
+        }
+
+        if is_semantic_number_start(line, byte, ch) {
+            let start = character;
+            let start_byte = byte;
+            while byte < line.len() {
+                let current = line[byte..]
+                    .chars()
+                    .next()
+                    .expect("byte index stays on a char boundary");
+                if !(current.is_ascii_alphanumeric() || current == '_' || current == '.') {
+                    break;
+                }
+                byte += current.len_utf8();
+                character += 1;
+            }
+            if byte == start_byte {
+                byte += ch.len_utf8();
+                character += 1;
+            }
+            tokens.push(SemanticToken {
+                line: line_number,
+                start,
+                length: character - start,
+                token_type: SEMANTIC_TOKEN_NUMBER,
+                modifiers: 0,
+            });
+            pending_declaration = None;
+            continue;
+        }
+
+        if is_semantic_identifier_start(ch) {
+            let start = character;
+            let start_byte = byte;
+            byte += ch.len_utf8();
+            character += 1;
+            while byte < line.len() {
+                let current = line[byte..]
+                    .chars()
+                    .next()
+                    .expect("byte index stays on a char boundary");
+                if !is_semantic_identifier_continue(current) {
+                    break;
+                }
+                byte += current.len_utf8();
+                character += 1;
+            }
+            let word = &line[start_byte..byte];
+            if is_semantic_keyword(word) {
+                if word == "async" {
+                    pending_async = true;
+                } else {
+                    pending_declaration = semantic_declaration_after_keyword(word, pending_async);
+                    if word != "export" {
+                        pending_async = false;
+                    }
+                }
+                tokens.push(SemanticToken {
+                    line: line_number,
+                    start,
+                    length: character - start,
+                    token_type: SEMANTIC_TOKEN_KEYWORD,
+                    modifiers: 0,
+                });
+                continue;
+            }
+
+            if let Some((token_type, modifiers)) = pending_declaration.take() {
+                tokens.push(SemanticToken {
+                    line: line_number,
+                    start,
+                    length: character - start,
+                    token_type,
+                    modifiers,
+                });
+            } else {
+                let token_type = if is_builtin_type_name(word) || starts_with_uppercase(word) {
+                    SEMANTIC_TOKEN_TYPE
+                } else if next_non_whitespace_char(line, byte) == Some('(') {
+                    SEMANTIC_TOKEN_FUNCTION
+                } else {
+                    SEMANTIC_TOKEN_VARIABLE
+                };
+                tokens.push(SemanticToken {
+                    line: line_number,
+                    start,
+                    length: character - start,
+                    token_type,
+                    modifiers: 0,
+                });
+            }
+            continue;
+        }
+
+        byte += ch.len_utf8();
+        character += 1;
+        if !matches!(ch, '<' | '>' | '[' | ']' | ',' | ':' | '.') {
+            pending_declaration = None;
+        }
+    }
+}
+
+fn encode_semantic_tokens(tokens: &[SemanticToken]) -> String {
+    let mut encoded = String::new();
+    let mut previous_line = 0u32;
+    let mut previous_start = 0u32;
+    for (index, token) in tokens.iter().enumerate() {
+        if index > 0 {
+            encoded.push(',');
+        }
+        let delta_line = token.line - previous_line;
+        let delta_start = if delta_line == 0 {
+            token.start - previous_start
+        } else {
+            token.start
+        };
+        let _ = write!(
+            encoded,
+            "{delta_line},{delta_start},{},{},{}",
+            token.length, token.token_type, token.modifiers
+        );
+        previous_line = token.line;
+        previous_start = token.start;
+    }
+    encoded
+}
+
+fn semantic_declaration_after_keyword(keyword: &str, pending_async: bool) -> Option<(u32, u32)> {
+    match keyword {
+        "fn" => {
+            let mut modifiers = SEMANTIC_MOD_DECLARATION;
+            if pending_async {
+                modifiers |= SEMANTIC_MOD_ASYNC;
+            }
+            Some((SEMANTIC_TOKEN_FUNCTION, modifiers))
+        }
+        "record" | "enum" | "trait" | "type" => {
+            Some((SEMANTIC_TOKEN_TYPE, SEMANTIC_MOD_DECLARATION))
+        }
+        "let" => Some((SEMANTIC_TOKEN_VARIABLE, SEMANTIC_MOD_DECLARATION)),
+        "const" => Some((
+            SEMANTIC_TOKEN_VARIABLE,
+            SEMANTIC_MOD_DECLARATION | SEMANTIC_MOD_READONLY,
+        )),
+        "as" => Some((SEMANTIC_TOKEN_NAMESPACE, SEMANTIC_MOD_DECLARATION)),
+        _ => None,
+    }
+}
+
+fn is_semantic_keyword(word: &str) -> bool {
+    matches!(
+        word,
+        "as" | "async"
+            | "await"
+            | "break"
+            | "const"
+            | "continue"
+            | "else"
+            | "enum"
+            | "err"
+            | "export"
+            | "fn"
+            | "for"
+            | "if"
+            | "impl"
+            | "import"
+            | "in"
+            | "let"
+            | "match"
+            | "none"
+            | "ok"
+            | "record"
+            | "return"
+            | "some"
+            | "trait"
+            | "type"
+            | "while"
+    )
+}
+
+fn is_builtin_type_name(word: &str) -> bool {
+    matches!(
+        word,
+        "bool" | "float" | "int" | "json" | "map" | "null" | "option" | "result" | "str" | "task"
+    )
+}
+
+fn starts_with_uppercase(word: &str) -> bool {
+    word.chars().next().is_some_and(char::is_uppercase)
+}
+
+fn is_semantic_identifier_start(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphabetic()
+}
+
+fn is_semantic_identifier_continue(ch: char) -> bool {
+    ch == '_' || ch.is_ascii_alphanumeric()
+}
+
+fn is_semantic_number_start(line: &str, byte: usize, ch: char) -> bool {
+    ch.is_ascii_digit()
+        || ((ch == '-' || ch == '+')
+            && line[byte + ch.len_utf8()..]
+                .chars()
+                .next()
+                .is_some_and(|next| next.is_ascii_digit()))
+}
+
+fn next_non_whitespace_char(line: &str, byte: usize) -> Option<char> {
+    line[byte..].chars().find(|ch| !ch.is_whitespace())
+}
+
 fn declaration_matches(trimmed: &str, name: &str) -> bool {
     let pattern_pairs = [
         ("export fn ", "("),
@@ -1188,6 +1537,49 @@ fn manifest_search_paths(base: &Path) -> Vec<PathBuf> {
         Ok(Some(manifest)) => manifest.source_dirs(),
         _ => Vec::new(),
     }
+}
+
+fn generated_source_hover_note(uri: &str) -> Option<String> {
+    let path = file_uri_path(uri)?;
+    let manifest = Manifest::discover(&path).ok()??;
+    let artifact = manifest
+        .codegen
+        .iter()
+        .find(|artifact| manifest.root.join(&artifact.generated) == path)?;
+    let mut note = format!("generated source\n\nartifact: {}", artifact.name);
+    if let Some(generator) = &artifact.generator {
+        note.push_str("\ngenerator: ");
+        note.push_str(generator);
+    }
+    if let Some(template) = &artifact.template {
+        note.push_str("\ntemplate: ");
+        note.push_str(&manifest.root.join(template).display().to_string());
+    }
+    if let Some(input_hash) = &artifact.input_hash {
+        note.push_str("\ninput_hash: ");
+        note.push_str(input_hash);
+    }
+    if let Some(source_map) = &artifact.source_map {
+        note.push_str("\nsource_map: ");
+        note.push_str(&manifest.root.join(source_map).display().to_string());
+    }
+    if let Some(source_map_hash) = &artifact.source_map_hash {
+        note.push_str("\nsource_map_hash: ");
+        note.push_str(source_map_hash);
+    }
+    if let Some(command) = &artifact.command {
+        note.push_str("\ncommand: ");
+        note.push_str(command);
+    }
+    Some(note)
+}
+
+fn append_generated_source_note(mut value: String, note: Option<String>) -> String {
+    if let Some(note) = note {
+        value.push_str("\n\n");
+        value.push_str(&note);
+    }
+    value
 }
 
 fn external_modules_for_base(
@@ -1373,6 +1765,7 @@ fn std_module_specifiers() -> &'static [&'static str] {
         "std/term.nox",
         "std/time.nox",
         "std/toml.nox",
+        "std/traits.nox",
         "std/tsv.nox",
         "std/url.nox",
     ]
@@ -1508,12 +1901,25 @@ fn active_call(source: &str, offset: usize) -> Option<ActiveCall> {
 }
 
 fn function_signature(source: &str, name: &str) -> Option<FunctionSignature> {
-    let needle = format!("fn {name}(");
+    let needle = format!("fn {name}");
     let needle_start = source.find(&needle)?;
     let is_async = source[..needle_start].trim_end().ends_with("async");
     let start = needle_start + "fn ".len();
     let rest = &source[start..];
-    let open = rest.find('(')?;
+    let after_name = rest.strip_prefix(name)?;
+    let after_name = after_name.trim_start();
+    let (type_params, after_type_params) = if let Some(tail) = after_name.strip_prefix('<') {
+        let close = tail.find('>')?;
+        let params = tail[..close].trim();
+        (Some(params), tail[close + 1..].trim_start())
+    } else {
+        (None, after_name)
+    };
+    let open = after_type_params.find('(')?;
+    if !after_type_params[..open].trim().is_empty() {
+        return None;
+    }
+    let rest = after_type_params;
     let close = rest[open + 1..].find(')')? + open + 1;
     let after_params = &rest[close + 1..];
     let return_type = after_params
@@ -1538,10 +1944,14 @@ fn function_signature(source: &str, name: &str) -> Option<FunctionSignature> {
             .map(|param| param.trim().to_string())
             .collect()
     };
+    let type_params = type_params
+        .filter(|params| !params.is_empty())
+        .map(|params| format!("<{params}>"))
+        .unwrap_or_default();
     let label = if is_async {
-        format!("async fn {name}({params}) -> {return_type} (task[{return_type}])")
+        format!("async fn {name}{type_params}({params}) -> {return_type} (task[{return_type}])")
     } else {
-        format!("fn {name}({params}) -> {return_type}")
+        format!("fn {name}{type_params}({params}) -> {return_type}")
     };
     Some(FunctionSignature { label, parameters })
 }

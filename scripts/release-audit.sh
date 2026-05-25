@@ -174,6 +174,7 @@ fi
 if [ -x scripts/release-cutover-check.sh ] \
     && [ -x scripts/release-cutover-status.sh ] \
     && [ -x scripts/release-asset-manifest.sh ] \
+    && [ -x scripts/release-asset-smoke.sh ] \
     && [ -x scripts/release-toolchain-status.sh ] \
     && [ -x scripts/release-upload-plan.sh ] \
     && [ -x scripts/release-notes.sh ] \
@@ -185,6 +186,7 @@ if [ -x scripts/release-cutover-check.sh ] \
     && grep -q "NOX_RELEASE_CI_EVIDENCE" scripts/release-cutover-check.sh \
     && grep -q "release asset builder self-test" scripts/release-gate.sh \
     && grep -q "release asset manifest self-test" scripts/release-gate.sh \
+    && grep -q "release asset smoke self-test" scripts/release-gate.sh \
     && grep -q "release toolchain status self-test" scripts/release-gate.sh \
     && grep -q "x86_64-unknown-linux-musl" scripts/release-asset-manifest.sh \
     && grep -q -- "--self-test" scripts/release-cutover-check.sh \
@@ -199,6 +201,8 @@ if [ -x scripts/release-cutover-check.sh ] \
     && grep -q "gh release upload" scripts/release-upload-plan.sh \
     && grep -q "release-asset-manifest.sh" scripts/release-upload-plan.sh \
     && grep -q "sha256sum -c" scripts/release-upload-plan.sh \
+    && grep -q "sha256sum -c" scripts/release-asset-smoke.sh \
+    && grep -q "examples/hello.nox" scripts/release-asset-smoke.sh \
     && grep -q "CHANGELOG section" scripts/release-notes.sh \
     && grep -q "release-cutover-check.sh" scripts/release-command-plan.sh \
     && grep -q "release-audit.sh" scripts/release-command-plan.sh \
@@ -223,8 +227,8 @@ else
 fi
 
 if [ -x scripts/prepare-release-version.sh ] \
-    && grep -q "prepare-release-version.sh 0.0.5" docs/zh_CN/release-checklist.md \
-    && grep -q "prepare-release-version.sh 0.0.5" docs/en/release-checklist.md \
+    && grep -q "prepare-release-version.sh <version>" docs/zh_CN/release-checklist.md \
+    && grep -q "prepare-release-version.sh <version>" docs/en/release-checklist.md \
     && grep -q -- "--self-test" scripts/prepare-release-version.sh \
     && grep -q -- "--check-only" scripts/prepare-release-version.sh \
     && grep -q "release-prep version helper self-test" scripts/release-gate.sh \

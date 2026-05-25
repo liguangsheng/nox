@@ -88,6 +88,33 @@ diagnostic。
 `if let` 解决。若未来真实代码大量出现“只为使用 `?` 被迫提取一次性函数”的模式，可以重启
 try-block ADR，但仍不得把 runtime diagnostic 变成可捕获异常。
 
+## 阶段 95 复评
+
+阶段 95 复查了当前 stdlib、examples、tests 和文档中的 `result` / `option` / `?` 用法：
+
+- `?` 的真实使用主要集中在小函数、async result/option 回归和少量 cookbook/example；还没有
+  出现大量“只为局部 `?` 链被迫提取一次性函数”的模式。
+- `std/option.nox` 和 `std/result.nox` 已有 `is_*`、`unwrap_or`、`map`、`map_err` 和
+  `and_then`，可以覆盖多数纯值转换。
+- JSON、fs、http、bytes、encoding、term、process 等 fallible helper 已经统一返回
+  `result` 或 `option`；权限、资源上限、host 边界和 parser/typechecker 仍稳定走 diagnostic。
+- docs 和 diagnostics 已经明确 `try` / `catch` / `finally` 不存在用户可见语义，且这些关键字
+  继续作为 reserved keyword 保留。
+
+结论：阶段 95 不重启 `try {}` block，也不引入 typed early return 语法、`throw` /
+`catch` / `finally`、VM unwind 或 catchable runtime diagnostic。阶段 96 如继续实现，只接受
+纯 stdlib ergonomics 扩面，优先补这类 helper：
+
+- `option.ok_or<T, E>(value: option[T], error: E) -> result[T, E]`，把缺失值转成可说明原因的
+  recoverable error。
+- `result.or_else<T, E>(value: result[T, E], f: fn(E) -> result[T, E]) -> result[T, E]`，
+  在不捕获 diagnostic 的前提下恢复普通 `err`。
+- `result.unwrap_or_else<T, E>(value: result[T, E], f: fn(E) -> T) -> T` 和
+  `option.unwrap_or_else<T>(value: option[T], f: fn() -> T) -> T`，避免提前计算 fallback。
+
+这些 helper 必须是普通源码级 stdlib 函数，不新增 parser/typechecker/formatter/LSP 语法分支，
+不改变 CLI JSON、LSP diagnostic schema、runtime stack trace 或权限边界。
+
 ## 重新启动条件
 
 满足以下条件之一时，可以重启 `try {}` 评估：
@@ -100,6 +127,30 @@ try-block ADR，但仍不得把 runtime diagnostic 变成可捕获异常。
 
 即使重启，仍保持以下硬边界：不做 `throw` / `catch` / `finally`，不做 VM unwind，不捕获
 runtime diagnostic，不让权限或资源限制变成用户可吞掉的值。
+
+## 阶段 109 复评
+
+阶段 109 再次复查了错误/异常模型。当前证据仍不支持重启异常机制或 Rust 风格 `try {}`：
+
+- `std/option.nox` 已提供 `is_some` / `is_none` / `unwrap_or` / `unwrap_or_else` / `ok_or` /
+  `map` / `and_then`；`std/result.nox` 已提供 `is_ok` / `is_err` / `unwrap_or` /
+  `unwrap_or_else` / `map` / `map_err` / `and_then` / `or_else` / `map_err_to_str`。
+- `?` 的主要使用仍集中在函数级 result/option 传播；还没有出现多个真实项目反复要求局部
+  `try {}` block 的证据。
+- cookbook 已给出推荐路线：局部链路需要 `?` 时提取小函数；小型值转换用 `map` / `and_then` /
+  `or_else` / `ok_or` 组合。
+- runtime diagnostic 边界仍然重要：permission denied、resource cap、host callback panic、
+  parser/typechecker diagnostic 和 stack trace 不能被脚本侧 catch 或吞掉。
+
+因此阶段 110 不实现 `try {}`、`throw`、`catch`、`finally`、VM unwind、catch frame 或 catchable
+runtime diagnostic。下一轮实现只接受低风险 ergonomics：
+
+- 增加源码级 `std/option.nox` / `std/result.nox` helper，或补 cookbook 示例。
+- 改善 `?` mismatch、reserved keyword 或 result/option helper 的诊断文案。
+- 增加 CLI JSON / LSP diagnostics parity 测试，证明错误模型仍是“可恢复失败为值，不可恢复边界为诊断”。
+
+仍然不改变以下事实：`try` / `catch` / `panic` / `defer` / `finally` 是 reserved keyword，但没有用户
+可见语义；`project check`、LSP 和 formatter 也不增加异常相关 schema 或 block 表达式支持。
 
 ## 备选方案
 

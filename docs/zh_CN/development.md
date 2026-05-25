@@ -64,7 +64,8 @@ cargo run -p nox -- inspect-bytecode --compact examples/hello.nox
 Nox 的 TextMate grammar 位于 `tools/nox.tmLanguage.json`，VS Code 扩展位于
 `tools/vscode-nox/`。扩展贡献 `.nox` 语言、高亮、LSP 启动和 DAP debug 配置；它默认从
 `NOX_BINARY` 或 PATH 中的 `nox` 启动 `nox lsp` / `nox dap`，也可以在 VS Code 设置
-`nox.binaryPath` 指向本地构建产物。
+`nox.binaryPath` 指向本地构建产物。LSP 刻意通过集成式 `nox lsp` 子命令交付，不拆独立
+LSP 二进制或单独 package。
 
 扩展 smoke 与打包命令：
 
@@ -75,8 +76,8 @@ npm run --prefix tools/vscode-nox package
 ```
 
 `package` 会生成 `.vsix`，并包含运行时依赖；安装后打开 `.nox` 文件应获得高亮、hover、
-signature help、code action、diagnostics/completion/formatting，以及 `Debug Nox script`
-启动配置。
+signature help、code action、diagnostics/completion/formatting/semantic tokens，以及
+`Debug Nox script` 启动配置。
 
 改 Rust/C embedding 表面、C ABI 或 header 时，运行 embedding regression：
 

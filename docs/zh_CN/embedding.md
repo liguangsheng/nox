@@ -593,8 +593,8 @@ let value = runtime.eval_file("examples/hello.nox")?;
 仍在等待的 task 数，也可以用 `spawn_sleep_task()` 创建 sleep task、`poll_async_task()`
 非阻塞检查并在 ready 时消费 task、`cancel_async_task()` 取消 pending task。三者复用
 `RuntimePermissions::async_tasks`、`async_task_max_pending` 和 unknown-id diagnostic。
-v0.0.x 不新增脚本级或 C ABI task status 查询；需要更细生命周期的宿主应在 Rust 侧维护自己的
-task registry，或注册自定义 host function。暂缓依据见
+v0.0.x 不新增脚本级 task status、通用 task payload handle 或 C ABI task handle；需要更细
+生命周期的宿主应在 Rust 侧维护自己的 task registry，或注册自定义 host function。暂缓依据见
 [0016 - 暂缓 async task 状态 API](decisions/0016-defer-async-task-status-api.md)；async/await
 升级路线见 [0030 - 分阶段引入 async/await](decisions/0030-staged-async-await.md)。
 

@@ -21,7 +21,7 @@ Important code families include:
 - `type.assign-target` for assignment targets that are not a variable, array index, or map index.
 - `generic.constraint-unsatisfied` when a generic function's actual type argument does not implement the declared built-in marker (Equatable / Comparable / Stringify / Hashable).
 - `generic.constraint-unknown` for the legacy built-in marker path. Since the trait MVP, `<T: Name>` is first parsed as a trait bound and unknown names use `trait.not-found`.
-- `trait.not-found`, `trait.impl-duplicate`, `trait.impl-incomplete`, `trait.method-signature-mismatch`, `trait.bound-unsatisfied`, `trait.method-not-found`, and `trait.method-ambiguous` for the experimental static trait MVP. In the current MVP, `trait.method-ambiguous` also covers impl method names that would collide with top-level functions.
+- `trait.duplicate`, `trait.not-found`, `trait.impl-duplicate`, `trait.impl-orphan`, `trait.impl-incomplete`, `trait.method-signature-mismatch`, `trait.bound-unsatisfied`, `trait.method-not-found`, and `trait.method-ambiguous` for the experimental static trait MVP. `trait.method-ambiguous` covers unresolved trait/record/imported candidates; a top-level record-style function and a trait impl method may share a name when receiver type selection is unique.
 - `parse.reserved-keyword` when source code uses `try`, `catch`, `panic`, `defer`, or `finally` as an identifier; these words remain reserved while ADR 0028 keeps exceptions and `try {}` blocks out of the language surface.
 - `watch.path-not-found` when `nox watch` is started but a `source_dirs` / `test_dirs` entry declared in the manifest does not exist on disk.
 - `test.assertion-failed` when an `assert_*` / `fail` helper in `std/test.nox` rejects a test case.

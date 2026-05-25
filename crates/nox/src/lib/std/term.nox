@@ -1,0 +1,43 @@
+export fn is_tty_stdout() -> bool {
+    return __nox_std_term_is_tty_stdout();
+}
+
+export fn is_tty_stderr() -> bool {
+    return __nox_std_term_is_tty_stderr();
+}
+
+export fn color_enabled() -> bool {
+    return __nox_std_term_color_enabled();
+}
+
+export fn style_color(value: str, color: str) -> str {
+    return __nox_std_term_style_color(value, color);
+}
+
+export fn style_bold(value: str) -> str {
+    return __nox_std_term_style_color(value, "bold");
+}
+
+export fn prompt(message: str) -> result[str, str] {
+    return __nox_std_term_prompt(message);
+}
+
+export fn confirm(message: str, default_yes: bool) -> result[bool, str] {
+    return __nox_std_term_confirm(message, default_yes);
+}
+
+export fn pad_column(value: str, width: int) -> str {
+    return __nox_std_term_pad_column(value, width);
+}
+
+export fn select(message: str, items: [str], default_index: int) -> result[int, str] {
+    return __nox_std_term_select(message, items, default_index);
+}
+
+export fn progress(current: int, total: int, width: int) -> str {
+    return __nox_std_term_progress(current, total, width);
+}
+
+export fn prompt_password(message: str) -> result[str, str] {
+    return __nox_std_term_prompt_password(message);
+}

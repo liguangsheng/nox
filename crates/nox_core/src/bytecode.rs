@@ -81,6 +81,7 @@ pub(crate) enum Instruction {
     TraitMethodCall {
         method_name: String,
         dispatch: Vec<TraitMethodDispatch>,
+        fallback_function: Option<String>,
         arg_count: usize,
         span: Span,
     },
@@ -279,10 +280,12 @@ impl Instruction {
                 method_name,
                 arg_count,
                 dispatch,
+                fallback_function,
                 ..
             } => format!(
-                "TraitMethodCall {method_name} argc={arg_count} targets={}",
-                dispatch.len()
+                "TraitMethodCall {method_name} argc={arg_count} targets={} fallback={}",
+                dispatch.len(),
+                fallback_function.as_deref().unwrap_or("-")
             ),
             Self::JsonDecode { target_type, .. } => format!("JsonDecode {target_type}"),
             Self::Array {
@@ -543,6 +546,7 @@ pub(crate) enum ByteExprKind {
         receiver: Box<ByteExpr>,
         args: Vec<ByteExpr>,
         dispatch: Vec<TraitMethodDispatch>,
+        fallback_function: Option<String>,
     },
     JsonDecode {
         value: Box<ByteExpr>,
@@ -641,6 +645,7 @@ pub(crate) struct ByteStringInterpolationPart {
 
 pub(crate) struct Compiler {
     enum_names: HashSet<String>,
+    top_level_functions: HashSet<String>,
     trait_method_dispatch: HashMap<String, Vec<TraitMethodDispatch>>,
     json_decode_schema: JsonDecodeSchema,
 }
@@ -1004,6 +1009,14 @@ impl Compiler {
                 _ => None,
             })
             .collect();
+        let top_level_functions = module
+            .statements
+            .iter()
+            .filter_map(|statement| match statement {
+                Stmt::Function { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect();
         let mut trait_method_dispatch: HashMap<String, Vec<TraitMethodDispatch>> = HashMap::new();
         for statement in &module.statements {
             let Stmt::Impl {
@@ -1062,6 +1075,7 @@ impl Compiler {
         };
         Self {
             enum_names,
+            top_level_functions,
             trait_method_dispatch,
             json_decode_schema,
         }
@@ -1674,6 +1688,10 @@ impl Compiler {
                     .map(|arg| self.compile_expr_with_context(arg, None, current_return))
                     .collect(),
                 dispatch: dispatch.clone(),
+                fallback_function: self
+                    .top_level_functions
+                    .contains(name)
+                    .then(|| name.to_string()),
             };
         }
         let mut method_args = Vec::with_capacity(args.len() + 1);
@@ -2284,6 +2302,7 @@ impl Compiler {
                 receiver,
                 args,
                 dispatch,
+                fallback_function,
             } => {
                 Self::emit_expr(receiver, instructions);
                 for arg in args {
@@ -2292,6 +2311,7 @@ impl Compiler {
                 instructions.push(Instruction::TraitMethodCall {
                     method_name: method_name.clone(),
                     dispatch: dispatch.clone(),
+                    fallback_function: fallback_function.clone(),
                     arg_count: args.len(),
                     span: expr.span,
                 });

@@ -1,0 +1,35 @@
+import "std/json.nox" as json;
+import "std/string.nox" as string;
+
+export fn parse_lines(source: str) -> result[[json], str] {
+    let values: [json] = [];
+    let lines: [str] = string.lines(source);
+    let i: int = 0;
+    while (i < len(lines)) {
+        let line: str = lines[i];
+        let parsed: result[json, str] = json.parse(line);
+        match (parsed) {
+            ok(value) => {
+                __nox_std_array_append(values, value);
+            }
+            err(message) => {
+                return err("line ${i + 1}: " + message);
+            }
+        }
+        i = i + 1;
+    }
+    return ok(values);
+}
+
+export fn format_lines(values: [json]) -> str {
+    let out: str = "";
+    let i: int = 0;
+    while (i < len(values)) {
+        if (i > 0) {
+            out = out + "\n";
+        }
+        out = out + json.stringify(values[i]);
+        i = i + 1;
+    }
+    return out;
+}

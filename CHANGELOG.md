@@ -6,6 +6,151 @@
 
 ## [未发布]
 
+## [0.0.6] — 2026-05-25
+
+- 文档：ADR 0031 增加阶段 117 集成式 LSP 第六轮复评结论，继续不拆独立 LSP
+  二进制、不做跨文件 rename、后台 daemon 或 generated/codegen source-map 穿透；阶段 118
+  首选把已审计的 `source_map` / `source_map_hash` 元数据加入 generated-source hover 标注。
+- LSP：generated source hover 标注现在会显示 manifest `[codegen]` artifact 中可选的
+  `source_map` 与 `source_map_hash` 元数据；LSP 仍不读取或解释 source map，也不把
+  diagnostics、definition、rename、formatting 或 semantic tokens 重映射到模板。
+- 文档：新增 ADR 0033 记录平台矩阵与分发第三轮路线；当前继续只承诺
+  `x86_64-unknown-linux-gnu` full SDK 和 `x86_64-unknown-linux-musl` CLI-only，不新增
+  无 CI / C ABI smoke / asset smoke 证据的平台资产。
+- 发布：`scripts/release-asset-manifest.sh --json` 现在输出机器可读资产矩阵，包含每个
+  release asset 的 `kind`、`target`、`commitment` 和 `c_abi_smoke_required`；默认文本输出
+  保持兼容。
+- 文档：新增 ADR 0034 记录生产证据第三轮路线；阶段 122 首选把机器可读 release asset
+  manifest 纳入 `scripts/release-evidence-report.sh`，不新增 runtime、语言或 stdlib 能力。
+- 发布：`scripts/release-evidence-report.sh` 现在输出 `Release Asset Manifest JSON` 段，
+  把 `nox.release-asset-manifest.v1` 资产矩阵与 cutover status、toolchain status 和命令计划
+  汇总到同一份只读 release 证据报告。
+- 发布：`scripts/release-candidate-readiness.sh` 现在守护阶段 117-122 的收敛结果，包括
+  LSP generated-source source-map 元数据边界、平台矩阵 ADR、asset manifest JSON 和 evidence
+  report JSON 段。
+- 文档：ADR 0032 增加阶段 115 数据脚本标准库第六轮设计结论，继续稳态化现有
+  YAML/XML 纯 helper；阶段 116 首选 `std/xml.nox` 安全 XML comment helper，不引入
+  YAML 完整化、压缩/归档、protobuf、SQLite/database driver、TLS/HTTPS 或 streaming writer。
+- 标准库：`std/xml.nox` 新增 `comment(value) -> result[str, str]`，用于生成安全 XML
+  comment 片段；内容包含 `--` 或以 `-` 结尾时返回 `err`。该 helper 仍是纯字符串能力，
+  不解析 XML、不提供 CDATA、processing instruction、schema validation 或 streaming writer。
+- 文档：ADR 0029 增加阶段 113 宏/codegen 复评结论，继续暂缓内建宏系统；阶段 114
+  首选 codegen source-map 元数据的只读审计，不引入 `macro` 语法、attribute、
+  procedural macro、compile-time execution 或 import-time codegen。
+- 工具：`[codegen]` artifact 新增可选 `source_map` 和 `source_map_hash` 元数据；
+  `nox project check --json` 只读报告 source-map 路径、存在性和 hash，并在声明的
+  source-map 文件缺失时返回 `manifest.invalid`。Nox 仍不执行生成器、不解释 source-map
+  内容，也不把 diagnostics、definition、rename、formatting 或 `nox doc` 穿透到模板。
+- 工具：ADR 0025 将 release CLI size cap 继续校准到 3.078125 MiB（3,227,648 bytes），
+  覆盖阶段 114 codegen source-map 元数据只读审计带来的约 3,220,344 bytes release CLI
+  实测体积；`nox_core` 上限和零第三方 runtime dependency 约束不变。
+- 文档：ADR 0030 增加阶段 111 async/await 第四轮复评结论，继续保持单 runtime、单线程、
+  显式权限、无 IO reactor 的模型；阶段 112 优先补 awaitable task 清理/取消传播、
+  async diagnostic parity 或 stdlib/doc surface 守卫，不引入 top-level await、async trait、
+  C ABI task handle、多线程 runtime 或真正非阻塞 IO。
+- Runtime：`run_test_file` 现在会在测试用例失败时清理本次 test run 创建的 async task，
+  同时保留运行前由宿主创建的 pending task，避免失败测试泄漏 awaitable sleep task。
+- 文档：ADR 0026 增加 GitHub/git module 生态第二轮设计结论，继续不做自建 registry、
+  publish 命令、中心索引或版本范围求解；阶段 106 首选 `nox fetch --check` / `--locked`
+  这类只验证 lockfile/cache、不改写项目状态的能力，`project check` 继续不联网。
+- CLI：`nox fetch` 新增 `--check` 和 `--locked` 只读模式，用于验证 manifest、`nox.lock`
+  和 module cache 是否仍一致而不改写 lockfile；二者可与 `--offline` 组合，cache miss、
+  corrupt cache、缺少 lockfile 或 lockfile drift 都会返回非零。
+- 文档：ADR 0027 增加 trait/interface 第五轮设计结论，继续采用单一静态 `trait`，
+  不引入 `interface` 别名、associated type、blanket/generic impl、trait object、dynamic dispatch
+  或 async trait；阶段 108 优先做标准库 trait helper、诊断/source identity、LSP/doc parity
+  这类小型静态强化。
+- 标准库：`std/traits.nox` 新增 `not_equal<T: Eq>` 和 `display_label<T: Display>`，
+  继续作为显式导入的小型静态 trait helper；不建立 prelude，不改变旧 `Equatable` marker helper。
+- 文档：ADR 0028 增加阶段 109 错误/异常模型复评结论，继续不实现 `try {}`、`throw`、
+  `catch`、`finally`、VM unwind 或 catchable runtime diagnostic；阶段 110 只接受 result/option
+  helper、诊断文案或 CLI/LSP parity 这类低风险 ergonomics。
+- 标准库：`std/option.nox` 新增 `filter<T>`，`std/result.nox` 新增 `map_or<T, U, E>`，
+  都是源码级纯 helper；不引入 `try {}`、异常、VM unwind 或 catchable runtime diagnostic。
+- 标准库：新增实验性纯计算 `std/yaml.nox` 和 `std/xml.nox`。YAML helper 提供最小配置
+  子集 `parse(source) -> result[json, str]`，XML helper 提供 name 校验、文本/属性转义和
+  安全标签拼接；压缩/归档、protobuf、SQLite/database driver 和 HTTPS/TLS 继续暂缓。
+- 标准库：`std/xml.nox` 新增 `attrs`、`empty_element` 和 `text_element_attrs`，用于批量
+  校验/转义属性并生成带属性的安全 XML 文本；仍不提供 XML parser、schema validation、
+  namespace resolver 或 streaming writer。
+- 标准库：`std/task.nox` 新增 `delay<T>`、`join2<T, U>` 和 `join3<T, U, V>`，
+  在不引入 IO reactor、多线程 runtime、top-level await 或 C ABI task handle 的前提下，
+  提供最小 task 组合 helper。
+- 标准库：`std/task.nox` 新增 `map<T, U>` 和 `and_then<T, U>`，用于组合调用方已经创建的
+  task；helper 本身不新增 runtime task kind、pending task 计数、隐式权限、取消语义或
+  后台 scheduler。
+- 文档：ADR 0028 增加阶段 95 复评结论，继续不重启 `try {}` block 或异常机制；阶段 96
+  只规划源码级 `std/option.nox` / `std/result.nox` ergonomics helper，不改变 parser、
+  VM unwind、CLI JSON、LSP diagnostic schema 或权限边界。
+- 标准库：`std/option.nox` 新增 `unwrap_or_else<T>` 和 `ok_or<T, E>`；`std/result.nox`
+  新增 `unwrap_or_else<T, E>` 和 `or_else<T, E>`。这些 helper 是纯源码级组合函数，
+  不捕获 runtime diagnostic，不新增权限、parser 语法或 CLI/LSP schema。
+- 文档：ADR 0027 增加 trait/interface 第四轮设计结论，继续选择单一静态 `trait` 路线；
+  阶段 98 首选实现是 typed method selection 和 method lookup 完整化，不引入 `interface`
+  语法别名、associated type、blanket/generic impl、dynamic dispatch、trait object 或 async trait。
+- 语言能力：trait impl method 现在可以与顶层 record-style function 同名；record-style function
+  的第一个参数匹配 receiver 时保持优先，否则 concrete receiver 可分派到唯一 trait impl method。
+  冲突仍使用 `trait.method-ambiguous`，不引入返回类型重载、dynamic dispatch 或 trait object。
+- 工具：ADR 0025 将 release CLI size cap 继续校准到 3.046875 MiB（3,194,880 bytes），
+  覆盖阶段 98 trait method lookup 完整化带来的约 3,188,880 bytes release CLI 实测体积；
+  `nox_core` 上限和零第三方 runtime dependency 约束不变。
+- 文档：ADR 0029 增加阶段 99 宏/codegen 复评结论，继续暂缓内建宏系统；阶段 100
+  首选方向收敛为外部 codegen source map / manifest 的显式只读工具支持，不引入 `macro`
+  语法、attribute、procedural macro、compile-time execution 或 import-time codegen。
+- 工具：`nox.toml` 新增可选 `[codegen]` 元数据 section，`nox project check --json`
+  只读报告 generated `.nox` 文件、generator/template/input hash/command，并拒绝缺失的
+  generated 文件；不会执行生成器、改变 import/typecheck/runtime 或把 LSP/doc 穿透到模板。
+- 工具：ADR 0025 将 release CLI size cap 继续校准到 3.0625 MiB（3,211,264 bytes），
+  覆盖阶段 100 codegen metadata 只读工具支持带来的约 3,205,504 bytes release CLI 实测体积；
+  `nox_core` 上限和零第三方 runtime dependency 约束不变。
+- 文档：ADR 0031 增加 LSP/IDE 第五轮设计结论，继续只交付集成式 `nox lsp`；阶段 102
+  首选实现收敛为 generated source 的只读 IDE 标注，不做独立 LSP 二进制、跨文件 rename、
+  后台 daemon、跨 invocation index 或真正 source-map 穿透。
+- LSP：当打开文件匹配 manifest `[codegen]` artifact 的 `generated` 路径时，hover 会追加
+  generated source 只读标注，包含 artifact 名称和可选 generator/template/input hash/command；
+  不执行生成器，也不改变 diagnostics、definition、rename、formatting 或 semantic tokens。
+- 文档：ADR 0032 增加数据脚本标准库第五轮设计结论，阶段 104 首选 `std/xml.nox`
+  namespace 文本生成 helper；YAML 完整实现、XML parser/namespace resolver、压缩/归档、
+  protobuf、SQLite/database driver 和 TLS/HTTPS 继续暂缓。
+- 标准库：`std/xml.nox` 新增 `qname`、`xmlns`、`xmlns_default`、`empty_element_ns`
+  和 `text_element_ns`，用于安全生成 namespace-qualified XML 文本；仍不解析 XML、不解析
+  namespace scope、不做 schema validation、XPath 或 streaming writer。
+- 工具：ADR 0025 将 release CLI size cap 继续校准到 3.0703125 MiB（3,219,456 bytes），
+  覆盖阶段 104 XML namespace helper 带来的约 3,211,904 bytes release CLI 实测体积；
+  `nox_core` 上限和零第三方 runtime dependency 约束不变。
+- 标准库：新增实验性 `std/traits.nox` 小核心，导出 `Eq`、`Display`、`equal<T: Eq>` 和
+  `display<T: Display>`，用于 trait/interface 第三轮的显式标准库抽象迁移；不建立 prelude，
+  不移除 `std/array.nox` 既有 `Eq` helper 或旧 marker helper。
+- 语言：泛型函数调用现在可以从 `task[T]` 参数推断 payload 类型，例如
+  `fn identity<T>(value: task[T]) -> task[T]` 能接受 `task[int]`。
+- LSP：hover 和 signature help 现在能展示泛型函数的 trait bound，例如
+  `fn label<T: Display>(value: T) -> str`，避免静态 trait 调用点只显示返回类型而丢失
+  bound 信息。
+- LSP：`nox lsp` 新增 `semanticTokensProvider` 和 `textDocument/semanticTokens/full`，
+  对已打开文档返回词法级 semantic token stream；继续不拆独立 LSP 二进制、不做
+  generated/codegen source map 或 external dependency source map。
+- LSP：`initialize` 现在为 code action 声明 `quickfix`、`source.fixAll.nox` 和
+  `source.format.nox`；`textDocument/codeAction` 返回 `nox.check`、`nox.format` source
+  action，并对可见 `TODO` marker 返回精确范围 quickfix edit。LSP 仍只通过集成式
+  `nox lsp` 子命令交付，不拆独立二进制或 package。
+- 语言设计：ADR 0027 增补 trait/interface 第三轮路线，下一步优先在 method lookup 收敛和
+  `std/traits.nox` 小核心迁移之间选择最小实现；associated type、blanket impl、dynamic
+  dispatch、trait object、async trait 和 `interface` 别名继续暂缓。
+- 工具：ADR 0025 将 release CLI size cap 从 3.0 MiB（3,145,728 bytes）小幅校准到
+  3.0078125 MiB（3,153,920 bytes），覆盖阶段 79 trait IDE hover/signature 增量；第三方
+  runtime dependency 仍保持 0。
+- 工具：ADR 0025 将 release CLI size cap 继续校准到 3.03125 MiB（3,178,496 bytes），
+  覆盖阶段 83 YAML/XML 纯计算标准库增量；第三方 runtime dependency 和新增 runtime
+  capability 仍保持 0。
+- 工具：ADR 0025 将 release CLI size cap 继续校准到 3.0390625 MiB（3,186,688 bytes），
+  覆盖阶段 90 `std/traits.nox` 小核心增量；第三方 runtime dependency、新增 runtime
+  capability、prelude 和默认授权仍保持 0。
+- 发布：新增 `scripts/release-asset-smoke.sh`，对 GitHub Release tarball 目录执行只读
+  download/repair smoke：校验 `.sha256`、解包资产、运行 host-compatible CLI tarball，并
+  编译 host-compatible embed C ABI 包；release gate 仅运行该脚本的 self-test。
+- 发布：`scripts/release-prep-dry-run.sh` 在工作区已经处于目标候选版本时改为只读验证
+  candidate readiness 和 release notes，避免把“已准备版本”误报为 dry-run 失败。
+
 ## [0.0.5] — 2026-05-24
 
 ### 工具和发布维护

@@ -265,7 +265,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "nox"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "criterion",
  "nox_core",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "nox_core"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "criterion",
 ]

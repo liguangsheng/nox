@@ -27,9 +27,12 @@ import "std/task.nox" as task;
 import "std/test.nox" as test;
 import "std/encoding.nox" as encoding;
 import "std/hash.nox" as hash;
+import "std/traits.nox" as traits;
 import "std/dotenv.nox" as dotenv;
 import "std/ini.nox" as ini;
 import "std/toml.nox" as toml;
+import "std/yaml.nox" as yaml;
+import "std/xml.nox" as xml;
 import "std/term.nox" as term;
 import "std/bytes.nox" as bytes;
 import "std/random.nox" as random;
@@ -78,6 +81,10 @@ fn surface_double(value: int) -> int {
     return value * 2;
 }
 
+fn surface_is_positive(value: int) -> bool {
+    return value > 0;
+}
+
 fn surface_some_increment(value: int) -> option[int] {
     return some(value + 1);
 }
@@ -92,6 +99,18 @@ fn surface_positive(value: int) -> result[int, str] {
 
 fn surface_prefix(value: str) -> str {
     return "error:" + value;
+}
+
+fn surface_fallback() -> int {
+    return 42;
+}
+
+fn surface_error_fallback(value: str) -> int {
+    return len(value);
+}
+
+fn surface_recover(value: str) -> result[int, str] {
+    return ok(len(value));
 }
 
 fn audit() -> int {
@@ -177,6 +196,10 @@ fn audit() -> int {
     let hash_text_probe: str = hash.sha256_text("abc");
     let hash_hmac_bytes_probe: str = hash.hmac_sha256_hex([107], [97]);
     let hash_hmac_text_probe: str = hash.hmac_sha256_text("key", "abc");
+    let traits_equal_probe: bool = traits.equal(1, 1);
+    let traits_not_equal_probe: bool = traits.not_equal(1, 2);
+    let traits_display_probe: str = traits.display(42);
+    let traits_display_label_probe: str = traits.display_label("answer", 42);
     let net_probe: bool = tcp_connect("0.0.0.0", 1);
     let async_sleep_probe: int = task_sleep_ms(0);
     let async_awaitable_sleep_probe: task[null] = task_sleep(0);
@@ -280,6 +303,11 @@ fn audit() -> int {
     let task_wait_probe: bool = task.wait(task_sleep_probe);
     let task_wait_timeout_probe: bool = task.wait_or_timeout(task_sleep_probe, 1);
     let task_pending_probe: int = task.pending_count();
+    let task_delay_probe: task[int] = task.delay(0, 7);
+    let task_join2_probe: task[(int, str)] = task.join2(task.delay(0, 1), task.delay(0, "two"));
+    let task_join3_probe: task[(int, str, bool)] = task.join3(task.delay(0, 1), task.delay(0, "three"), task.delay(0, true));
+    let task_map_probe: task[int] = task.map(task.delay(0, 2), fn(value: int) -> int { return value + 1; });
+    let task_and_then_probe: task[str] = task.and_then(task.delay(0, 3), fn(value: int) -> task[str] { return task.delay(0, "task-${value}"); });
     test.assert_true(true, "surface-assert-true");
     test.assert_false(false, "surface-assert-false");
     test.assert_eq(1, 1, "surface-assert-eq");
@@ -314,6 +342,22 @@ fn audit() -> int {
     let dotenv_probe: result[map[str, str], str] = dotenv.parse("KEY=value");
     let ini_probe: result[map[str, map[str, str]], str] = ini.parse("[section]\nkey=value");
     let toml_probe: result[json, str] = toml.parse("[section]\nkey = \"value\"");
+    let yaml_probe: result[json, str] = yaml.parse("section:\n  key: value");
+    let xml_name_probe: result[str, str] = xml.validate_name("section");
+    let xml_escape_text_probe: str = xml.escape_text("<section>&");
+    let xml_escape_attr_probe: str = xml.escape_attr("\"section\"");
+    let xml_unescape_probe: str = xml.unescape_text("&lt;section&gt;");
+    let xml_comment_probe: result[str, str] = xml.comment("generated");
+    let xml_text_probe: result[str, str] = xml.text_element("section", "value");
+    let xml_attr_probe: result[str, str] = xml.attr("name", "value");
+    let xml_attrs_probe: result[str, str] = xml.attrs({"name": "value"});
+    let xml_empty_probe: result[str, str] = xml.empty_element("section", {"name": "value"});
+    let xml_text_attrs_probe: result[str, str] = xml.text_element_attrs("section", {"name": "value"}, "text");
+    let xml_qname_probe: result[str, str] = xml.qname("app", "section");
+    let xml_xmlns_probe: result[str, str] = xml.xmlns("app", "urn:nox");
+    let xml_xmlns_default_probe: result[str, str] = xml.xmlns_default("urn:nox");
+    let xml_empty_ns_probe: result[str, str] = xml.empty_element_ns("app", "section", {"xmlns:app": "urn:nox"});
+    let xml_text_ns_probe: result[str, str] = xml.text_element_ns("app", "section", {"xmlns:app": "urn:nox"}, "text");
     let map_keys_mod_probe: [str] = map.keys(map_probe);
     let map_values_mod_probe: [int] = map.values(map_probe);
     let map_entries_probe: [(str, int)] = map.entries(map_probe);
@@ -327,16 +371,22 @@ fn audit() -> int {
     let option_is_some_probe: bool = option.is_some(option_probe);
     let option_is_none_probe: bool = option.is_none(option_none_probe);
     let option_unwrap_probe: int = option.unwrap_or(option_probe, 0);
+    let option_unwrap_or_else_probe: int = option.unwrap_or_else(option_none_probe, surface_fallback);
+    let option_ok_or_probe: result[int, str] = option.ok_or(option_probe, "missing");
     let option_map_probe: option[int] = option.map(option_probe, surface_double);
+    let option_filter_probe: option[int] = option.filter(option_probe, surface_is_positive);
     let option_and_then_probe: option[int] = option.and_then(option_probe, surface_some_increment);
     let result_probe: result[int, str] = ok(1);
     let result_err_probe_value: result[int, str] = err("bad");
     let result_is_ok_probe: bool = result.is_ok(result_probe);
     let result_is_err_probe: bool = result.is_err(result_err_probe_value);
     let result_unwrap_probe: int = result.unwrap_or(result_probe, 0);
+    let result_unwrap_or_else_probe: int = result.unwrap_or_else(result_err_probe_value, surface_error_fallback);
     let result_map_probe: result[int, str] = result.map(result_probe, surface_double);
     let result_map_err_probe_value: result[int, str] = result.map_err(result_err_probe_value, surface_prefix);
     let result_and_then_probe: result[int, str] = result.and_then(result_probe, surface_positive);
+    let result_or_else_probe: result[int, str] = result.or_else(result_err_probe_value, surface_recover);
+    let result_map_or_probe: int = result.map_or(result_probe, 0, surface_double);
     let result_map_err_probe: result[int, str] = result.map_err_to_str(result_probe);
     let json_parse_probe: result[json, str] = json.parse("{\"ok\":true}");
     let json_stringify_probe: str = "";

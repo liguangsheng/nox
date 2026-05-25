@@ -1,0 +1,28 @@
+import "std/json.nox" as json;
+import "std/yaml.nox" as yaml;
+import "std/xml.nox" as xml;
+
+let source: str = "name: Nox\nserver:\n  port: 8080\n  enabled: true\ntags: [cli, runtime]\n";
+let parsed: result[json, str] = yaml.parse(source);
+let label: str = "data formats example failed";
+
+match (parsed) {
+    ok(config) => {
+        let summary: str = json.stringify(config);
+        let element: result[str, str] = xml.text_element_ns("app", "summary", {"format": "json", "xmlns:app": "urn:nox:data"}, summary);
+        match (element) {
+            ok(output) => {
+                print(output);
+                label = "data formats example complete";
+            }
+            err(message) => {
+                label = message;
+            }
+        }
+    }
+    err(message) => {
+        label = message;
+    }
+}
+
+label;

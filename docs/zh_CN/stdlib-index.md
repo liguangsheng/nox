@@ -22,16 +22,19 @@
 | 文本和数据处理 | `std/hash.nox` | stable | sha256_hex / sha256_text / hmac_sha256_hex / hmac_sha256_text，用于确定性 SHA-256 和 HMAC-SHA256 digest |
 | 集合 | `std/array.nox` | stable | len / is_empty / push_copy / concat / slice_copy / reverse_copy / sort_copy_int / sort_copy_str / set / append / pop / map_fn / filter_fn / reduce / for_each / dedupe / contains_value |
 | 集合 | `std/array.nox` | experimental | Eq trait / dedupe_equal / contains_equal；静态 trait MVP 表面仍可能调整 |
+| Traits | `std/traits.nox` | experimental | Eq trait / Display trait / equal / not_equal / display / display_label；静态 trait MVP 表面仍可能调整 |
 | 集合 | `std/map.nox` | stable | keys / values / entries / merge / remove_copy / get_or / set / delete |
-| 选项与结果 | `std/option.nox` / `std/result.nox` | stable | is_some / is_none / is_ok / is_err / unwrap_or / map / map_err / and_then / map_err_to_str |
+| 选项与结果 | `std/option.nox` / `std/result.nox` | stable | is_some / is_none / is_ok / is_err / unwrap_or / unwrap_or_else / ok_or / filter / map / map_or / map_err / and_then / or_else / map_err_to_str |
 | 编码 | `std/encoding.nox` | stable | base64_encode / base64_decode / hex_encode / hex_decode |
 | 配置 | `std/dotenv.nox` | stable | parse (KEY=value，支持注释和引号) |
 | 配置 | `std/ini.nox` | stable | parse 简单 section 和 key/value |
 | 配置 | `std/toml.nox` | stable | parse 最小 TOML 子集到 json |
+| 配置 | `std/yaml.nox` | experimental | parse 最小 YAML 配置子集到 json |
+| 文本和数据处理 | `std/xml.nox` | experimental | validate_name / escape_text / escape_attr / unescape_text / comment / text_element / attr / attrs / qname / xmlns / xmlns_default / empty_element / text_element_attrs / empty_element_ns / text_element_ns，用于安全 XML 文本生成 |
 | URL | `std/url.nox` | stable | parse / build / query_encode / query_decode |
 | HTTP | `std/http.nox` | stable, permissioned (`network`) | get / post / request / get_binary / post_binary / request_binary over HTTP/1.1（仅明文），以及对应 `_async` wrapper；request helper 支持自定义请求 header 和返回 response headers；1 MiB 响应上限；30s 默认超时 |
 | 时间 | `std/time.nox` | stable | sleep_ms (permissioned) / now_unix / now_unix_ms / duration_ms / format_unix / parse_unix / from_seconds / from_minutes / from_hours / to_seconds / to_minutes / to_hours / iso8601_format / iso8601_parse / deadline_ms / is_past_deadline_ms / add_days / add_months / year_of / month_of / day_of / weekday_of |
-| 异步任务 | `std/task.nox` | stable, permissioned (`async task`) | sleep_ms / sleep / is_ready / cancel / wait / wait_or_timeout / pending_count |
+| 异步任务 | `std/task.nox` | stable, permissioned (`async task`) | sleep_ms / sleep / is_ready / cancel / wait / wait_or_timeout / pending_count / delay / join2 / join3 / map / and_then |
 | 文件系统 | `std/fs.nox` | stable, permissioned (`filesystem` / `filesystem_write`) | exists / read_text / try_read_text / write_text / read_binary / write_binary / canonicalize / is_file / is_dir / list_dir，以及对应 `_async` wrapper |
 | 路径 | `std/path.nox` | stable | join / basename / dirname / extension / normalize（纯计算，不访问文件系统） |
 | 环境 | `std/env.nox` | stable, permissioned (`environment`) | get / try_get / list |

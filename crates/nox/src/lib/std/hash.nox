@@ -1,0 +1,15 @@
+export fn sha256_hex(bytes: [int]) -> str {
+    return __nox_std_hash_sha256_hex(bytes);
+}
+
+export fn sha256_text(value: str) -> str {
+    return __nox_std_hash_sha256_text(value);
+}
+
+export fn hmac_sha256_hex(key: [int], bytes: [int]) -> str {
+    return __nox_std_hash_hmac_sha256_hex(key, bytes);
+}
+
+export fn hmac_sha256_text(key: str, value: str) -> str {
+    return __nox_std_hash_hmac_sha256_text(key, value);
+}

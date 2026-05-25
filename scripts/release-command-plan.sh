@@ -101,6 +101,11 @@ emit_plan() {
     printf ' NOX_RELEASE_ASSET_DIR='
     shell_quote "$DIST"
     printf ' scripts/release-upload-plan.sh\n\n'
+    printf 'NOX_RELEASE_TAG='
+    shell_quote "$TAG"
+    printf ' NOX_RELEASE_ASSET_DIR='
+    shell_quote "$DIST"
+    printf ' scripts/release-asset-smoke.sh\n\n'
 
     printf '5. Upload release assets and run strict cutover checks\n'
     printf '# Use the upload command printed by scripts/release-upload-plan.sh after creating the GitHub Release.\n'
@@ -121,6 +126,7 @@ if [ "${1:-}" = "--self-test" ]; then
 *"scripts/release-toolchain-status.sh"*\
 *"git commit -m 'release v0.0.5'"*\
 *"CLI_ONLY_TARGET_TRIPLES='x86_64-unknown-linux-musl' scripts/build-release-assets.sh"*\
+*"scripts/release-asset-smoke.sh"*\
 *"scripts/release-cutover-check.sh"*\
 *"scripts/release-audit.sh"*) ;;
         *)

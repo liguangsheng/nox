@@ -1,0 +1,15 @@
+export fn parse(url: str) -> result[(str, str, int, str, str), str] {
+    return __nox_std_url_parse(url);
+}
+
+export fn build(scheme: str, host: str, port: int, path: str, query: str) -> str {
+    return __nox_std_url_build(scheme, host, port, path, query);
+}
+
+export fn query_encode(value: str) -> str {
+    return __nox_std_url_query_encode(value);
+}
+
+export fn query_decode(value: str) -> result[str, str] {
+    return __nox_std_url_query_decode(value);
+}

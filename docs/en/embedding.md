@@ -165,6 +165,10 @@ assert_eq!(runtime.poll_async_task(id)?, AsyncTaskPoll::Ready);
 `async_tasks` permission, pending-task cap, unknown-id diagnostic, and cleanup
 rules as the script helpers. Ready and cancelled tasks are consumed and become
 unknown on later polls.
+The runtime does not expose generic task status, task payload handles, or C ABI
+task handles. Hosts that need richer scheduling should keep that registry in
+Rust or behind their own host functions; the built-in runtime only promises the
+single-runtime sleep task table and explicit poll/cancel API.
 
 ## Heap Limits
 

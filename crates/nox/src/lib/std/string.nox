@@ -1,0 +1,71 @@
+export fn split(value: str, separator: str) -> [str] {
+    return __nox_std_string_split(value, separator);
+}
+
+export fn join(values: [str], separator: str) -> str {
+    return __nox_std_string_join(values, separator);
+}
+
+export fn substring(value: str, start: int, length: int) -> str {
+    return __nox_std_string_substring(value, start, length);
+}
+
+export fn trim(value: str) -> str {
+    return __nox_std_string_trim(value);
+}
+
+export fn replace(value: str, from: str, to: str) -> str {
+    return __nox_std_string_replace(value, from, to);
+}
+
+export fn starts_with(value: str, prefix: str) -> bool {
+    return __nox_std_string_starts_with(value, prefix);
+}
+
+export fn ends_with(value: str, suffix: str) -> bool {
+    return __nox_std_string_ends_with(value, suffix);
+}
+
+export fn index_of(value: str, needle: str) -> int {
+    return __nox_std_string_index_of(value, needle);
+}
+
+export fn contains(value: str, needle: str) -> bool {
+    return __nox_std_string_contains(value, needle);
+}
+
+export fn last_index_of(value: str, needle: str) -> int {
+    return __nox_std_string_last_index_of(value, needle);
+}
+
+export fn repeat(value: str, count: int) -> str {
+    return __nox_std_string_repeat(value, count);
+}
+
+export fn pad_left(value: str, width: int, fill: str) -> str {
+    return __nox_std_string_pad_left(value, width, fill);
+}
+
+export fn pad_right(value: str, width: int, fill: str) -> str {
+    return __nox_std_string_pad_right(value, width, fill);
+}
+
+export fn parse_int(value: str) -> result[int, str] {
+    return __nox_std_string_parse_int(value);
+}
+
+export fn parse_float(value: str) -> result[float, str] {
+    return __nox_std_string_parse_float(value);
+}
+
+export fn lines(value: str) -> [str] {
+    return __nox_std_string_lines(value);
+}
+
+export fn to_upper(value: str) -> str {
+    return __nox_std_string_to_upper(value);
+}
+
+export fn to_lower(value: str) -> str {
+    return __nox_std_string_to_lower(value);
+}

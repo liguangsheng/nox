@@ -27,7 +27,7 @@ explicitly visible.
 
 ## Editor Tooling
 
-The TextMate grammar lives at `tools/nox.tmLanguage.json`, and the VS Code extension lives under `tools/vscode-nox/`. The extension contributes the `.nox` language, syntax highlighting, LSP startup, and a DAP debug configuration. It starts `nox lsp` and `nox dap` from the `nox.binaryPath` setting, `NOX_BINARY`, or `nox` on `PATH`.
+The TextMate grammar lives at `tools/nox.tmLanguage.json`, and the VS Code extension lives under `tools/vscode-nox/`. The extension contributes the `.nox` language, syntax highlighting, LSP startup, and a DAP debug configuration. It starts `nox lsp` and `nox dap` from the `nox.binaryPath` setting, `NOX_BINARY`, or `nox` on `PATH`. The LSP is intentionally delivered through the integrated `nox lsp` subcommand; there is no separate LSP binary or package.
 
 Run the extension checks and package smoke with:
 
@@ -37,7 +37,7 @@ npm run --prefix tools/vscode-nox smoke
 npm run --prefix tools/vscode-nox package
 ```
 
-The `.vsix` package includes runtime dependencies. After installation, `.nox` files should have highlighting, LSP hover/signature help/code actions/diagnostics/completion/formatting, and the `Debug Nox script` launch configuration.
+The `.vsix` package includes runtime dependencies. After installation, `.nox` files should have highlighting, LSP hover/signature help/code actions/diagnostics/completion/formatting/semantic tokens, and the `Debug Nox script` launch configuration.
 
 ## Fuzzing
 

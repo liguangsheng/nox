@@ -31,6 +31,8 @@ nox project check
 nox project check --json
 nox fetch
 nox fetch --offline
+nox fetch --check
+nox fetch --locked
 ```
 
 `nox new <name> [--dir <path>] [--force]` creates a minimal project with
@@ -104,21 +106,27 @@ the same discovery rule to emit `nox.runTest` commands for individual tests.
 `nox project check --json` emits `nox.project-check.v1`. The schema reports the
 manifest root, package metadata, manifest schema validation summary, entrypoints,
 declared runtime capabilities, declared GitHub/git dependencies, lockfile
-validation status, the discovered module graph, child step results, and a
-summary. The manifest parser rejects unsupported sections and unsupported keys
-in fixed sections; the JSON `schema_validation` object records that contract for
-valid projects. When `[dependencies]` is present, `project check` requires a
-matching `nox.lock` and reports missing, invalid, or drifted lockfiles without
-fetching dependencies. The module graph lists manifest source roots and
-discovered `.nox` files; this command does not resolve external modules or grant
-additional runtime capabilities.
+validation status, explicit `[codegen]` metadata, the discovered module graph,
+child step results, and a summary. The manifest parser rejects unsupported
+sections and unsupported keys in fixed sections; the JSON `schema_validation`
+object records that contract for valid projects. When `[dependencies]` is
+present, `project check` requires a matching `nox.lock` and reports missing,
+invalid, or drifted lockfiles without fetching dependencies. When `[codegen]` is
+present, each artifact must declare a project-local generated `.nox` file; the
+JSON report marks whether it exists and echoes optional generator, template,
+input hash, source-map path/hash, and command text. Declared source-map files are
+checked for existence, but not interpreted. `project check` does not run code
+generators or map diagnostics back to templates. The module graph lists manifest
+source roots and discovered `.nox` files; this command does not resolve external
+modules or grant additional runtime capabilities.
 
-`nox fetch [--offline] [--cache-dir <dir>]` is the explicit dependency download
-step for projects that declare pinned GitHub/git dependencies. It discovers
-`nox.toml`, clones or updates each dependency into the module cache, resolves
-the pinned tag or commit to a full commit hash, computes a `sha256:<hex>` content
-hash from the git archive, and writes `nox.lock` in the manifest root. The
-default cache directory is `$NOX_MODULE_CACHE` when set, otherwise
+`nox fetch [--offline] [--check|--locked] [--cache-dir <dir>]` is the explicit
+dependency download step for projects that declare pinned GitHub/git
+dependencies. It discovers `nox.toml`, clones or updates each dependency into
+the module cache, resolves the pinned tag or commit to a full commit hash,
+computes a `sha256:<hex>` content hash from the git archive, and writes
+`nox.lock` in the manifest root. The default cache directory is
+`$NOX_MODULE_CACHE` when set, otherwise
 `$HOME/.cache/nox/modules` when `$HOME` is available. `--cache-dir` overrides
 that location for reproducible tests or CI. `--offline` never runs `git fetch`:
 it uses an existing cache entry and fails on cache miss or corrupt cache.
@@ -127,6 +135,15 @@ objects, not project state. Restore it with `nox fetch` or, in locked-down CI,
 with `nox fetch --offline --cache-dir <dir>` after pre-populating the same
 cache path. Use `NOX_MODULE_CACHE=<dir>` for later `run`, `check`, `test`, and
 `nox lsp` invocations when the lockfile was produced with a non-default cache.
+
+`--check` and `--locked` are read-only modes. They resolve dependency pins,
+compute the current cache content hash, and verify that the existing `nox.lock`
+still matches without rewriting it. Use `--check` in CI to detect whether the
+lockfile would change; use `--locked` when the existing lockfile/cache must
+already be usable. Both flags can be combined with `--offline`, in which case
+the command only consumes existing cache entries. Cache misses, corrupt cache,
+missing lockfiles, and lockfile drift return non-zero.
+
 Fetching dependencies is a tooling operation only; it does not grant filesystem,
 network, environment, timer, process, or async runtime capabilities to scripts.
 External dependency imports use `import "<dependency>/<path>.nox"` after
@@ -152,8 +169,12 @@ successfully, `nox run` uses that value as the process exit code.
 
 `nox lsp` starts the stdio Language Server Protocol server. It advertises
 diagnostics, hover, formatting, completion, signature help, code actions,
-document symbols, workspace symbols, and a conservative go-to-definition subset.
-It also advertises rename with prepare support for current-file top-level symbols.
+document symbols, semantic tokens, workspace symbols, and a conservative
+go-to-definition subset. It also advertises rename with prepare support for
+current-file top-level symbols. Code actions declare `quickfix`,
+`source.fixAll.nox`, and `source.format.nox`; the server returns `nox.check` and
+`nox.format` source actions plus a precise quickfix edit for visible `TODO`
+markers.
 Document symbols cover current-document top-level `fn`, `async fn`, `record`,
 `enum`, `trait`, `type`, `let`, and `const` declarations. Workspace symbols list
 project top-level `fn`, `record`, `enum`, and `type` declarations from manifest
@@ -169,10 +190,21 @@ receiver has an explicit `let value: Type` annotation; it stays empty when the
 receiver type is not obvious. Hover over an `async fn` call shows the static
 `task[T]` call result plus the source signature. Signature help for `async fn`
 keeps the source return type and annotates the call-side `task[T]` result. Hover
-over a namespace import alias, such as `fs` in `import "std/fs.nox" as fs;`,
-shows the module specifier and exported surface; project module aliases use the
-same rule.
+and signature help for generic functions keep function-level trait bounds such
+as `fn label<T: Display>(value: T) -> str`. Hover over a namespace import alias,
+such as `fs` in `import "std/fs.nox" as fs;`, shows the module specifier and
+exported surface; project module aliases use the same rule. When an open file
+matches a manifest `[codegen]` artifact's `generated` path, hover appends a
+read-only generated-source note with the artifact name and optional
+generator/template/input-hash/source-map/source-map-hash/command metadata. This
+note does not execute the generator, read or interpret the source map, or remap
+diagnostics, definition, rename, formatting, or semantic tokens to the template.
 Diagnostics include `data.trace_id` for tool correlation.
+`textDocument/semanticTokens/full` returns a lexical semantic-token stream for
+open documents. The legend covers namespace aliases, type names, functions,
+variables, keywords, strings, numbers, and comments, with declaration, readonly,
+and async modifiers. It does not tokenize generated/codegen sources or external
+dependency source maps.
 Go-to-definition only resolves those top-level declarations in the
 same open document, plus exported top-level declarations reached through
 `import "path" as alias; alias.member` and direct `import "path"; Symbol`
@@ -180,8 +212,9 @@ references. Cross-file definition lookup follows manifest `modules.source_dirs`
 and open-document overlays, but deliberately returns `null` for virtual stdlib
 modules and external dependency modules. Rename is limited to current-file top-level symbols; prepare/rename
 return `null` when a same-name local declaration or parameter would make the edit
-unsafe. Cross-file rename, watch mode, and daemon mode are not exposed as
-capabilities.
+unsafe. Cross-file rename, generated/codegen source maps, watch mode, and
+daemon mode are not exposed as capabilities. The LSP continues to run as the
+integrated `nox lsp` subcommand; there is no separate LSP binary or package.
 
 `nox host-metadata --json` emits `nox.host-metadata.v1`, a local-process view of
 registered host functions with signatures, docstrings, and declared capability

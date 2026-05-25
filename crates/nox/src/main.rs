@@ -15,7 +15,7 @@ use nox::{
     },
     Runtime, RuntimePermissions, RuntimeTraceEvent, RuntimeTraceValue,
 };
-use nox_core::{Diagnostic, Value};
+use nox_core::{Diagnostic, Span, Value};
 
 struct CheckFileReport {
     path: String,
@@ -60,6 +60,25 @@ struct ProjectLockfileReport {
     ok: bool,
     status: &'static str,
     diagnostics: Vec<Diagnostic>,
+}
+
+struct ProjectCodegenReport {
+    ok: bool,
+    artifacts: Vec<ProjectCodegenArtifactReport>,
+    diagnostics: Vec<Diagnostic>,
+}
+
+struct ProjectCodegenArtifactReport {
+    name: String,
+    generated: String,
+    generator: Option<String>,
+    template: Option<String>,
+    input_hash: Option<String>,
+    source_map: Option<String>,
+    source_map_hash: Option<String>,
+    source_map_exists: Option<bool>,
+    command: Option<String>,
+    exists: bool,
 }
 
 struct ProjectModuleGraph {
@@ -187,7 +206,7 @@ fn print_usage_and_exit() -> ! {
     );
     eprintln!("       nox fmt [--check | --write] <file.nox> [file.nox ...]");
     eprintln!("       nox new <name> [--dir <path>] [--force]");
-    eprintln!("       nox fetch [--offline] [--cache-dir <dir>]");
+    eprintln!("       nox fetch [--offline] [--check|--locked] [--cache-dir <dir>]");
     eprintln!("       nox project check [--json]");
     eprintln!("       nox repl");
     eprintln!("       nox lsp");
@@ -259,11 +278,26 @@ fn run_new(raw_args: Vec<String>) -> i32 {
 
 fn run_fetch(raw_args: Vec<String>) -> i32 {
     let mut offline = false;
+    let mut mode = FetchMode::Write;
     let mut cache_dir: Option<PathBuf> = None;
     let mut args = raw_args.into_iter();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--offline" => offline = true,
+            "--check" => {
+                if mode != FetchMode::Write {
+                    eprintln!("fetch: --check and --locked are mutually exclusive");
+                    return 2;
+                }
+                mode = FetchMode::Check;
+            }
+            "--locked" => {
+                if mode != FetchMode::Write {
+                    eprintln!("fetch: --check and --locked are mutually exclusive");
+                    return 2;
+                }
+                mode = FetchMode::Locked;
+            }
             "--cache-dir" => {
                 let Some(path) = args.next() else {
                     eprintln!("fetch: --cache-dir requires a path");
@@ -281,6 +315,17 @@ fn run_fetch(raw_args: Vec<String>) -> i32 {
         }
     }
 
+    run_fetch_with_mode(offline, mode, cache_dir)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FetchMode {
+    Write,
+    Check,
+    Locked,
+}
+
+fn run_fetch_with_mode(offline: bool, mode: FetchMode, cache_dir: Option<PathBuf>) -> i32 {
     let manifest = match Manifest::discover(Path::new(".")) {
         Ok(Some(manifest)) => manifest,
         Ok(None) => {
@@ -325,6 +370,18 @@ fn run_fetch(raw_args: Vec<String>) -> i32 {
         dependencies: locked,
     };
     let lock_path = manifest.root.join(nox::manifest::LOCK_FILE_NAME);
+    if mode != FetchMode::Write {
+        match check_fetch_lockfile(&manifest, &lockfile) {
+            Ok(()) => {
+                println!("fetch: lockfile ok");
+                return 0;
+            }
+            Err(message) => {
+                eprintln!("fetch: {message}");
+                return 1;
+            }
+        }
+    }
     if let Err(err) = fs::write(&lock_path, lockfile.to_source()) {
         eprintln!(
             "fetch: failed to write lockfile '{}': {err}",
@@ -334,6 +391,50 @@ fn run_fetch(raw_args: Vec<String>) -> i32 {
     }
     println!("fetch: wrote {}", lock_path.display());
     0
+}
+
+fn check_fetch_lockfile(manifest: &Manifest, expected: &Lockfile) -> Result<(), String> {
+    let validation = validate_lockfile_for_manifest(manifest);
+    if !validation.ok {
+        return Err(validation
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.clone())
+            .collect::<Vec<_>>()
+            .join("; "));
+    }
+    let current = Lockfile::load(&validation.path).map_err(|err| err.message)?;
+    for dependency in &expected.dependencies {
+        let current_dependency = current
+            .dependencies
+            .iter()
+            .find(|candidate| candidate.name == dependency.name)
+            .ok_or_else(|| {
+                format!(
+                    "lockfile is missing dependency '{}'; run nox fetch",
+                    dependency.name
+                )
+            })?;
+        if current_dependency.resolved != dependency.resolved {
+            return Err(format!(
+                "lockfile dependency '{}' resolved commit does not match current pin; run nox fetch",
+                dependency.name
+            ));
+        }
+        if current_dependency.content_hash != dependency.content_hash {
+            return Err(format!(
+                "lockfile dependency '{}' content hash does not match current cache; run nox fetch",
+                dependency.name
+            ));
+        }
+        if current_dependency.cache_key != dependency.cache_key {
+            return Err(format!(
+                "lockfile dependency '{}' cache key does not match current source; run nox fetch",
+                dependency.name
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn default_module_cache_dir() -> PathBuf {
@@ -1986,11 +2087,21 @@ fn run_project(raw_args: Vec<String>) -> i32 {
     }
 
     let lockfile = project_lockfile_report(&manifest);
+    let codegen = project_codegen_report(&manifest);
     if lockfile.status != "not_required" {
         println!("project check: lockfile");
     }
     if !lockfile.ok {
         for diagnostic in &lockfile.diagnostics {
+            println!("project check: {diagnostic}");
+        }
+        return 1;
+    }
+    if !manifest.codegen.is_empty() {
+        println!("project check: codegen");
+    }
+    if !codegen.ok {
+        for diagnostic in &codegen.diagnostics {
             println!("project check: {diagnostic}");
         }
         return 1;
@@ -2015,6 +2126,7 @@ fn run_project(raw_args: Vec<String>) -> i32 {
 
 fn run_project_check_json(manifest: &Manifest) -> i32 {
     let lockfile = project_lockfile_report(manifest);
+    let codegen = project_codegen_report(manifest);
     let exe = match env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
@@ -2050,8 +2162,11 @@ fn run_project_check_json(manifest: &Manifest) -> i32 {
     })
     .collect::<Vec<_>>();
 
-    let ok = lockfile.ok && steps.iter().all(|step| step.status == 0);
-    println!("{}", project_check_json(manifest, &lockfile, &steps));
+    let ok = lockfile.ok && codegen.ok && steps.iter().all(|step| step.status == 0);
+    println!(
+        "{}",
+        project_check_json(manifest, &lockfile, &codegen, &steps)
+    );
     if ok {
         0
     } else if steps.iter().any(|step| step.status == 2) {
@@ -2973,13 +3088,74 @@ fn project_lockfile_report(manifest: &Manifest) -> ProjectLockfileReport {
     }
 }
 
+fn project_codegen_report(manifest: &Manifest) -> ProjectCodegenReport {
+    let mut artifacts = Vec::new();
+    let mut diagnostics = Vec::new();
+    for artifact in &manifest.codegen {
+        let generated_path = manifest.root.join(&artifact.generated);
+        let exists = generated_path.is_file();
+        if !exists {
+            diagnostics.push(
+                Diagnostic::new(
+                    format!(
+                        "generated source '{}' declared by codegen artifact '{}' does not exist",
+                        generated_path.display(),
+                        artifact.name
+                    ),
+                    Span { start: 0, end: 0 },
+                )
+                .with_code("manifest.invalid"),
+            );
+        }
+        let source_map = artifact
+            .source_map
+            .as_ref()
+            .map(|path| manifest.root.join(path));
+        let source_map_exists = source_map.as_ref().map(|path| path.is_file());
+        if let (Some(source_map), Some(false)) = (&source_map, source_map_exists) {
+            diagnostics.push(
+                Diagnostic::new(
+                    format!(
+                        "source map '{}' declared by codegen artifact '{}' does not exist",
+                        source_map.display(),
+                        artifact.name
+                    ),
+                    Span { start: 0, end: 0 },
+                )
+                .with_code("manifest.invalid"),
+            );
+        }
+        artifacts.push(ProjectCodegenArtifactReport {
+            name: artifact.name.clone(),
+            generated: generated_path.display().to_string(),
+            generator: artifact.generator.clone(),
+            template: artifact
+                .template
+                .as_ref()
+                .map(|path| manifest.root.join(path).display().to_string()),
+            input_hash: artifact.input_hash.clone(),
+            source_map: source_map.map(|path| path.display().to_string()),
+            source_map_hash: artifact.source_map_hash.clone(),
+            source_map_exists,
+            command: artifact.command.clone(),
+            exists,
+        });
+    }
+    ProjectCodegenReport {
+        ok: diagnostics.is_empty(),
+        artifacts,
+        diagnostics,
+    }
+}
+
 fn project_check_json(
     manifest: &Manifest,
     lockfile: &ProjectLockfileReport,
+    codegen: &ProjectCodegenReport,
     steps: &[ProjectStepReport],
 ) -> String {
     let mut json = String::new();
-    let ok = lockfile.ok && steps.iter().all(|step| step.status == 0);
+    let ok = lockfile.ok && codegen.ok && steps.iter().all(|step| step.status == 0);
     let graph = project_module_graph(manifest);
     write!(
         &mut json,
@@ -2996,6 +3172,8 @@ fn project_check_json(
     write_project_capabilities_json(&mut json, manifest);
     json.push(',');
     write_project_dependencies_json(&mut json, manifest, lockfile);
+    json.push(',');
+    write_project_codegen_json(&mut json, codegen);
     json.push(',');
     write_project_module_graph_json(&mut json, &graph);
     json.push_str(",\"steps\":[");
@@ -3066,6 +3244,7 @@ fn write_project_schema_validation_json(json: &mut String) {
         "modules",
         "dependencies",
         "runtime",
+        "codegen",
     ]
     .iter()
     .enumerate()
@@ -3076,6 +3255,79 @@ fn write_project_schema_validation_json(json: &mut String) {
         write!(json, "\"{section}\"").expect("writing to String cannot fail");
     }
     json.push_str("],\"unknown_sections\":\"rejected\",\"unknown_keys\":\"rejected\"}");
+}
+
+fn write_project_codegen_json(json: &mut String, codegen: &ProjectCodegenReport) {
+    json.push_str("\"codegen\":{\"ok\":");
+    write!(json, "{}", codegen.ok).expect("writing to String cannot fail");
+    json.push_str(",\"artifacts\":[");
+    for (index, artifact) in codegen.artifacts.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        write!(
+            json,
+            "{{\"name\":\"{}\",\"generated\":\"{}\",\"exists\":{}",
+            json_escape(&artifact.name),
+            json_escape(&artifact.generated),
+            artifact.exists
+        )
+        .expect("writing to String cannot fail");
+        match &artifact.generator {
+            Some(generator) => write!(json, ",\"generator\":\"{}\"", json_escape(generator))
+                .expect("writing to String cannot fail"),
+            None => json.push_str(",\"generator\":null"),
+        }
+        match &artifact.template {
+            Some(template) => write!(json, ",\"template\":\"{}\"", json_escape(template))
+                .expect("writing to String cannot fail"),
+            None => json.push_str(",\"template\":null"),
+        }
+        match &artifact.input_hash {
+            Some(input_hash) => write!(json, ",\"input_hash\":\"{}\"", json_escape(input_hash))
+                .expect("writing to String cannot fail"),
+            None => json.push_str(",\"input_hash\":null"),
+        }
+        match &artifact.source_map {
+            Some(source_map) => write!(json, ",\"source_map\":\"{}\"", json_escape(source_map))
+                .expect("writing to String cannot fail"),
+            None => json.push_str(",\"source_map\":null"),
+        }
+        match artifact.source_map_exists {
+            Some(exists) => write!(json, ",\"source_map_exists\":{exists}")
+                .expect("writing to String cannot fail"),
+            None => json.push_str(",\"source_map_exists\":null"),
+        }
+        match &artifact.source_map_hash {
+            Some(source_map_hash) => write!(
+                json,
+                ",\"source_map_hash\":\"{}\"",
+                json_escape(source_map_hash)
+            )
+            .expect("writing to String cannot fail"),
+            None => json.push_str(",\"source_map_hash\":null"),
+        }
+        match &artifact.command {
+            Some(command) => write!(json, ",\"command\":\"{}\"", json_escape(command))
+                .expect("writing to String cannot fail"),
+            None => json.push_str(",\"command\":null"),
+        }
+        json.push('}');
+    }
+    json.push_str("],\"diagnostics\":[");
+    for (index, diagnostic) in codegen.diagnostics.iter().enumerate() {
+        if index > 0 {
+            json.push(',');
+        }
+        write!(
+            json,
+            "{{\"code\":\"{}\",\"message\":\"{}\"}}",
+            json_escape(diagnostic.code),
+            json_escape(&diagnostic.message)
+        )
+        .expect("writing to String cannot fail");
+    }
+    json.push_str("]}");
 }
 
 fn write_project_dependencies_json(

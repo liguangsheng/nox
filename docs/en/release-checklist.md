@@ -21,8 +21,8 @@ Nox releases must keep version identity and evidence aligned:
 
 ## Current Checkpoint State
 
-The latest production release is `v0.0.5`. The next release candidate starts at
-`v0.0.5`, but candidate audits on `main` keep `[workspace.package].version` at
+The latest production release is `v0.0.6`. The next release candidate starts at
+the next patch version, but candidate audits on `main` keep `[workspace.package].version` at
 the previous prepared version until the dedicated release-prep commit. In this
 state, `CHANGELOG.md` keeps the next candidate changes under `[未发布]`;
 `scripts/release-candidate-readiness.sh` verifies that this intentional
@@ -41,9 +41,13 @@ an embedding SDK for it until the C ABI has target-specific smoke evidence.
 Other targets are source-build-only or best-effort until their toolchain,
 artifact build, and smoke evidence are documented here.
 
-To produce both tarballs and their `.sha256` sidecars in one step, run `scripts/build-release-assets.sh` after the release tag is pushed; it builds the release in an isolated git worktree on the tag and writes four files per full SDK target to `/tmp/nox-release-assets-<tag>/` ready for GitHub Release upload. Before that build, run `scripts/release-toolchain-status.sh` to confirm the local Rust targets required by the release asset manifest, especially the CLI-only `x86_64-unknown-linux-musl` target. Set `NOX_RELEASE_TAG=<tag>` when not passing the tag as an argument. Set `NOX_RELEASE_ASSET_DIR=/tmp/nox-release-assets-<tag>` when using a non-default output directory, and pass the same value to `scripts/release-upload-plan.sh` to print the exact `gh release upload <tag> <files...>` command after inspecting the assets. By default it builds the current Rust host triple. Set `TARGET_TRIPLES="x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu ..."` only after the target toolchains and C ABI smoke coverage are available. Set `CLI_ONLY_TARGET_TRIPLES="x86_64-unknown-linux-musl"` to additionally produce CLI-only assets for CI-smoked targets whose embedding SDK is not committed yet. Use `TARGET_TRIPLES=""` when intentionally producing only CLI-only assets for a verification run. This is a required release step — releases without binary assets force downstream users to build from source.
+To produce both tarballs and their `.sha256` sidecars in one step, run `scripts/build-release-assets.sh` after the release tag is pushed; it builds the release in an isolated git worktree on the tag and writes four files per full SDK target to `/tmp/nox-release-assets-<tag>/` ready for GitHub Release upload. Before that build, run `scripts/release-toolchain-status.sh` to confirm the local Rust targets required by the release asset manifest, especially the CLI-only `x86_64-unknown-linux-musl` target. Set `NOX_RELEASE_TAG=<tag>` when not passing the tag as an argument. Set `NOX_RELEASE_ASSET_DIR=/tmp/nox-release-assets-<tag>` when using a non-default output directory, and pass the same value to `scripts/release-upload-plan.sh` to print the exact `gh release upload <tag> <files...>` command after inspecting the assets. Run `scripts/release-asset-smoke.sh` against the same asset directory before upload, and again against downloaded GitHub Release assets if the release is repaired or mirrored. The smoke verifies each `.sha256`, extracts each tarball, runs host-compatible CLI assets against `examples/hello.nox`, and compiles the host-compatible embed C ABI package. By default `build-release-assets.sh` builds the current Rust host triple. Set `TARGET_TRIPLES="x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu ..."` only after the target toolchains and C ABI smoke coverage are available. Set `CLI_ONLY_TARGET_TRIPLES="x86_64-unknown-linux-musl"` to additionally produce CLI-only assets for CI-smoked targets whose embedding SDK is not committed yet. Use `TARGET_TRIPLES=""` when intentionally producing only CLI-only assets for a verification run. This is a required release step — releases without binary assets force downstream users to build from source.
+`scripts/release-asset-manifest.sh --json` prints the same required assets with
+machine-readable `kind`, `target`, `commitment`, and `c_abi_smoke_required`
+fields for evidence reports and manual audit; the default text output remains
+the compatibility source for upload and cutover scripts.
 
-Use `NOX_RELEASE_VERSION=0.0.5 scripts/release-notes.sh` to generate GitHub
+Use `NOX_RELEASE_VERSION=<version> scripts/release-notes.sh` to generate GitHub
 Release notes from the matching CHANGELOG section. Do not rewrite them by hand;
 CHANGELOG remains the single source of release notes. Use
 `scripts/release-command-plan.sh` to print the full Phase 77 command sequence
@@ -53,11 +57,11 @@ and again after assets exist to capture the cutover status JSON, toolchain
 status JSON, required asset manifest, and command plan in one reviewable report.
 
 For the dedicated release-prep commit, run
-`scripts/prepare-release-version.sh 0.0.5 YYYY-MM-DD` to update the workspace
+`scripts/prepare-release-version.sh <version> YYYY-MM-DD` to update the workspace
 version, `nox_core` dependency version, CHANGELOG release heading, README
 version identity, and `Cargo.lock`. The script does not commit, tag, push, build
 assets, or upload a GitHub Release. Before making that diff, run
-`scripts/prepare-release-version.sh --check-only 0.0.5 YYYY-MM-DD` to verify the
+`scripts/prepare-release-version.sh --check-only <version> YYYY-MM-DD` to verify the
 expected release-prep anchors without editing files. Run
 `scripts/release-prep-dry-run.sh` before the real release-prep commit to apply
 the same version switch in a temporary copy and verify cutover readiness plus

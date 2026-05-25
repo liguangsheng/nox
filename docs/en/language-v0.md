@@ -113,19 +113,31 @@ fn label<T: Display>(value: T) -> str {
 ```
 
 This is a static MVP only. It does not support an `interface` alias, dynamic
-dispatch, trait objects, blanket impls, associated types, or higher-kinded types.
+dispatch, trait objects, blanket impls, generic impls, associated types, or
+higher-kinded types.
 Impl methods compile to internal mangled function names and dispatch by receiver
 nominal type, so different types can implement the same trait method name. Source
 top-level functions are still the entry point for ordinary record method sugar,
-so impl methods currently cannot share a name with top-level functions; those
-conflicts use `trait.method-ambiguous`.
+and record-style methods keep precedence when their first parameter matches the
+receiver. Otherwise a concrete receiver can still use a unique trait impl method
+with the same method name.
+
+Method lookup is intentionally conservative: existing record-style methods and
+namespace members keep precedence when they resolve uniquely, then the checker
+looks for a unique trait impl on the concrete receiver type or a unique method
+from the generic receiver's trait bounds. Ambiguous trait/record candidates are
+rejected instead of being guessed from return type.
 
 The first standard library trait surface is `std/array.nox`'s `Eq` trait plus
-`contains_equal<T: Eq>` and `dedupe_equal<T: Eq>`. Built-in `Eq` impls cover
-`null`, `bool`, `int`, `float`, and `str`; user records/enums can implement the
-same `Eq` after directly importing `std/array.nox`. The older
-`contains_value<T: Equatable>` and `dedupe<T: Equatable>` helpers remain as the
-built-in marker compatibility layer.
+`contains_equal<T: Eq>` and `dedupe_equal<T: Eq>`. The third-round trait
+surface adds experimental `std/traits.nox` with a small explicit core:
+`Eq`, `Display`, `equal<T: Eq>`, and `display<T: Display>`. Built-in impls
+cover `null`, `bool`, `int`, `float`, and `str`; user records/enums can
+implement those traits after directly importing the module that defines them.
+The older `contains_value<T: Equatable>` and `dedupe<T: Equatable>` helpers
+remain as the built-in marker compatibility layer. See
+[`0027 - static trait system`](../zh_CN/decisions/0027-static-trait-system.md)
+for the long-term trait/interface boundary.
 
 Bitwise operators require `int` operands and return `int`; non-`int` operands
 use `type.bitwise-non-int`. Operations use the 64-bit signed `int`
@@ -182,14 +194,17 @@ await. Inside `async fn f() -> result[T, E]` or `async fn f() -> option[T]`,
 postfix `?` propagates through the declared payload result/option exactly as it
 does in synchronous functions; runtime diagnostics are still not converted into
 `err` or `none`. A script whose final value is an unconsumed task raises
-`async.top-level-task`.
+`async.top-level-task`. Generic functions can infer type parameters through
+`task[T]` arguments, so helper functions such as `fn identity<T>(value:
+task[T]) -> task[T]` accept `task[int]` without explicit type arguments.
 
 Current non-goals include JavaScript compatibility, Node.js package
 compatibility, JIT compilation, browser APIs, macro systems, trait objects,
 dynamic dispatch, exceptions, full async runtime features, and a general package
 registry. Macro-like repetition should currently be handled with functions,
 traits, standard-library helpers, or explicit external code generation before
-Nox compilation.
+Nox compilation; generated `.nox` files are treated as ordinary source by
+`nox check`, `nox test`, LSP, and release gates.
 
 Integer literals support decimal, `0xff` hexadecimal, `0b1010` binary,
 `0o17` octal, and `_` separators such as `1_000_000`. Malformed integer

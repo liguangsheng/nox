@@ -1,12 +1,26 @@
+import "std/task.nox" as task;
+
 async fn compute(value: int) -> int {
     return value + 1;
 }
 
+async fn label() -> str {
+    return "value";
+}
+
+async fn chained_label(value: int) -> str {
+    return "chained-${value}";
+}
+
 async fn verify() -> null {
-    let value: int = await compute(41);
-    print("async value=${value}");
+    let pair: (int, str) = await task.join2(compute(41), label());
+    let (value, name) = pair;
+    print("async ${name}=${value}");
+    let mapped: int = await task.map(compute(9), fn(value: int) -> int { return value * 2; });
+    let chained: str = await task.and_then(compute(4), chained_label);
+    print("async mapped=${mapped} ${chained}");
     return null;
 }
 
-let task: task[null] = verify();
+let verify_task: task[null] = verify();
 "async example complete";
