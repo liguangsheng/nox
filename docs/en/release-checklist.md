@@ -26,7 +26,7 @@ The support and security process is defined in
 
 ## Current Checkpoint State
 
-The latest production release is `v0.0.6`. The next release candidate starts at
+The latest production release is `v0.0.7`. The next release candidate starts at
 the next patch version, but candidate audits on `main` keep `[workspace.package].version` at
 the previous prepared version until the dedicated release-prep commit. In this
 state, `CHANGELOG.md` keeps the next candidate changes under `[未发布]`;

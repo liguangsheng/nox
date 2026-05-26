@@ -21,7 +21,7 @@ checklist 到 issue/PR 中逐项勾选。
 ## 当前本地 checkpoint 状态
 
 当前 checkout 的 Cargo workspace 版本、`nox --version` 和 CHANGELOG 最新已发布节均为
-`0.0.6`。本仓库已经配置 `origin` remote；release 收口时必须同时核对本地 tag、远端 tag
+`0.0.7`。本仓库已经配置 `origin` remote；release 收口时必须同时核对本地 tag、远端 tag
 和 GitHub Release，不能只看本地 gate。
 
 下一轮候选版本从下一个 patch 版本开始。进入 release candidate 审计时，审计批次只验证当前

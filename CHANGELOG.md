@@ -6,6 +6,8 @@
 
 ## [未发布]
 
+## [0.0.7] — 2026-05-26
+
 - 文档：新增中英文稳定性与兼容承诺矩阵，明确 `v0.0.x` release 线中 Rust API、C ABI、
   CLI JSON、diagnostic code、LSP diagnostics、语言语义、stdlib、release assets 和暂缓项的
   稳定 / 实验 / 暂缓 / 内部边界，作为 `v0.0.7` 稳定化路线的第一步。

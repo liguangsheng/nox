@@ -10,7 +10,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-nox_core = { version = "0.0.6", path = "../nox_core" }
+nox_core = { version = "0.0.7", path = "../nox_core" }
 
 [dev-dependencies]
 criterion = "0.5"

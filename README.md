@@ -13,7 +13,7 @@ The workspace contains two crates:
 
 ## Status
 
-The latest production release is `v0.0.6`. For that version, the Cargo version, git tag, CHANGELOG, release checklist, GitHub Release, remote CI, local release gate, and distribution smoke tests are aligned.
+The latest production release is `v0.0.7`. For that version, the Cargo version, git tag, CHANGELOG, release checklist, GitHub Release, remote CI, local release gate, and distribution smoke tests are aligned.
 
 Future `0.0.x` versions may still evolve the language, runtime, and embedding APIs. Breaking changes must be called out in the CHANGELOG, relevant documentation, and release notes.
 
@@ -29,32 +29,32 @@ The default runtime resolves `import "..."` relative to the entry file and insta
 
 GitHub Releases split the command-line tool and embedding SDK starting with `v0.0.3`:
 
-- `nox-cli-v0.0.6-x86_64-unknown-linux-gnu.tar.gz`: for CLI users. It contains `bin/nox`, README files, the CHANGELOG, and script examples.
-- `nox-embed-v0.0.6-x86_64-unknown-linux-gnu.tar.gz`: for host applications. It contains `lib/libnox_core.so`, `include/nox_core.h`, README files, the CHANGELOG, and a C embedding example.
+- `nox-cli-v0.0.7-x86_64-unknown-linux-gnu.tar.gz`: for CLI users. It contains `bin/nox`, README files, the CHANGELOG, and script examples.
+- `nox-embed-v0.0.7-x86_64-unknown-linux-gnu.tar.gz`: for host applications. It contains `lib/libnox_core.so`, `include/nox_core.h`, README files, the CHANGELOG, and a C embedding example.
 
 Download, verify, and install the CLI to `/usr/local/bin/nox`:
 
 ```sh
-curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.6/nox-cli-v0.0.6-x86_64-unknown-linux-gnu.tar.gz
-curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.6/nox-cli-v0.0.6-x86_64-unknown-linux-gnu.sha256
-sha256sum -c nox-cli-v0.0.6-x86_64-unknown-linux-gnu.sha256
-tar -xzf nox-cli-v0.0.6-x86_64-unknown-linux-gnu.tar.gz
-sudo install -m 0755 nox-cli-v0.0.6-x86_64-unknown-linux-gnu/bin/nox /usr/local/bin/nox
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.7/nox-cli-v0.0.7-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.7/nox-cli-v0.0.7-x86_64-unknown-linux-gnu.sha256
+sha256sum -c nox-cli-v0.0.7-x86_64-unknown-linux-gnu.sha256
+tar -xzf nox-cli-v0.0.7-x86_64-unknown-linux-gnu.tar.gz
+sudo install -m 0755 nox-cli-v0.0.7-x86_64-unknown-linux-gnu/bin/nox /usr/local/bin/nox
 nox --version
-nox run ./nox-cli-v0.0.6-x86_64-unknown-linux-gnu/examples/hello.nox
+nox run ./nox-cli-v0.0.7-x86_64-unknown-linux-gnu/examples/hello.nox
 ```
 
 Download and verify the embedding SDK:
 
 ```sh
-curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.6/nox-embed-v0.0.6-x86_64-unknown-linux-gnu.tar.gz
-curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.6/nox-embed-v0.0.6-x86_64-unknown-linux-gnu.sha256
-sha256sum -c nox-embed-v0.0.6-x86_64-unknown-linux-gnu.sha256
-tar -xzf nox-embed-v0.0.6-x86_64-unknown-linux-gnu.tar.gz
-cc -Inox-embed-v0.0.6-x86_64-unknown-linux-gnu/include \
-  nox-embed-v0.0.6-x86_64-unknown-linux-gnu/examples/embed/c_embedding.c \
-  -Lnox-embed-v0.0.6-x86_64-unknown-linux-gnu/lib -lnox_core \
-  -Wl,-rpath,"$PWD/nox-embed-v0.0.6-x86_64-unknown-linux-gnu/lib" \
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.7/nox-embed-v0.0.7-x86_64-unknown-linux-gnu.tar.gz
+curl -LO https://github.com/liguangsheng/nox/releases/download/v0.0.7/nox-embed-v0.0.7-x86_64-unknown-linux-gnu.sha256
+sha256sum -c nox-embed-v0.0.7-x86_64-unknown-linux-gnu.sha256
+tar -xzf nox-embed-v0.0.7-x86_64-unknown-linux-gnu.tar.gz
+cc -Inox-embed-v0.0.7-x86_64-unknown-linux-gnu/include \
+  nox-embed-v0.0.7-x86_64-unknown-linux-gnu/examples/embed/c_embedding.c \
+  -Lnox-embed-v0.0.7-x86_64-unknown-linux-gnu/lib -lnox_core \
+  -Wl,-rpath,"$PWD/nox-embed-v0.0.7-x86_64-unknown-linux-gnu/lib" \
   -o /tmp/nox-c-embedding-smoke
 /tmp/nox-c-embedding-smoke
 ```
@@ -86,7 +86,7 @@ Install the CLI directly from a GitHub tag when you need an exact repository
 release before, or instead of, a crates.io publish:
 
 ```sh
-cargo install --git https://github.com/liguangsheng/nox --tag v0.0.6 --locked nox
+cargo install --git https://github.com/liguangsheng/nox --tag v0.0.7 --locked nox
 nox --version
 ```
 
